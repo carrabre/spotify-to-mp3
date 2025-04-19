@@ -6,7 +6,12 @@ async function getSpotifyToken(): Promise<string> {
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET
 
   if (!clientId || !clientSecret) {
-    throw new Error("Spotify credentials are not configured")
+    console.error("SPOTIFY ENV DEBUG:", {
+      clientIdExists: !!clientId,
+      clientSecretExists: !!clientSecret,
+      processEnvKeys: Object.keys(process.env).filter(key => key.startsWith('SPOTIFY') || key.startsWith('NEXT')).join(', ')
+    });
+    throw new Error(`Spotify credentials are not configured. ClientID: ${clientId ? "Set" : "Missing"}, ClientSecret: ${clientSecret ? "Set" : "Missing"}`)
   }
 
   const response = await fetch("https://accounts.spotify.com/api/token", {
@@ -40,6 +45,7 @@ function convertSpotifyTrack(spotifyTrack: SpotifyTrack): Track {
     spotifyUrl: spotifyTrack.external_urls.spotify,
     youtubeId: null,
     youtubeTitle: null,
+    youtubeThumbnail: null,
   }
 }
 
