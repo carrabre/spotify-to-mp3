@@ -68,13 +68,15 @@ export default function SpotifyConverter() {
     setProcessingStatus("Fetching tracks from Spotify...")
 
     try {
-      // Fetch tracks from Spotify
-      const spotifyTracks = await fetchSpotifyData(spotifyUrl)
+      // Fetch tracks via our new server-side API (no client credentials required)
+      const response = await fetch(`/api/spotify?url=${encodeURIComponent(spotifyUrl)}`)
+      if (!response.ok) throw new Error(`Spotify API returned status ${response.status}`)
+      const spotifyTracks = await response.json()
 
       setProcessingStatus(`Found ${spotifyTracks.length} tracks. Preparing for verification...`)
 
       // Initialize tracks without YouTube matches
-      const initialTracks = spotifyTracks.map((track) => ({
+      const initialTracks = spotifyTracks.map((track: any) => ({
         ...track,
         youtubeId: null,
         youtubeTitle: null,
@@ -375,8 +377,8 @@ export default function SpotifyConverter() {
     console.log(`[Client][${downloadId}] Set download state for track "${track.name}"`)
 
     try {
-      // Create the download URL using our new download-binary endpoint which handles the data more carefully
-      const downloadUrl = `/api/download-binary?videoId=${track.youtubeId}&title=${encodeURIComponent(track.name)}&artist=${encodeURIComponent(track.artists.join(", "))}&quality=4`
+      // Create the download URL using our new transcode endpoint which always returns MP3 data
+      const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
       console.log(`[Client][${downloadId}] Download URL created: ${downloadUrl}`)
 
       // Simulate progress updates
@@ -523,8 +525,8 @@ export default function SpotifyConverter() {
     setDownloadProgress((prev) => ({ ...prev, [track.id]: 0 })) // Start at 0%
 
     try {
-      // Create the download URL with our new download-binary endpoint, using a lower quality setting
-      const downloadUrl = `/api/download-binary?videoId=${track.youtubeId}&title=${encodeURIComponent(track.name)}&artist=${encodeURIComponent(track.artists.join(", "))}&quality=3`
+      // Create the download URL with our new transcode endpoint
+      const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
       console.log(`[Client][${downloadId}] Retry download URL created: ${downloadUrl}`)
 
       // Simulate progress updates
