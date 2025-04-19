@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Download, Loader2, CheckCircle2, AlertCircle, X } from "lucide-react"
+import { useDownloadStore } from "@/lib/stores/download-store"
 import type { Track } from "@/lib/types"
 
 interface ZipDownloadModalProps {
@@ -15,106 +16,197 @@ interface ZipDownloadModalProps {
 }
 
 export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloadModalProps) {
-  const [isDownloading, setIsDownloading] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [currentTrack, setCurrentTrack] = useState<string | null>(null)
-  const [processedCount, setProcessedCount] = useState(0)
+  const {
+    isDownloading,
+    progress,
+    currentTrack,
+    processedCount,
+    totalTracks,
+    error,
+    startDownload,
+    setDownloadState
+  } = useDownloadStore()
+
   const [status, setStatus] = useState<"idle" | "downloading" | "complete" | "error">("idle")
-  const [error, setError] = useState<string | null>(null)
-  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string | null>(null)
-  const [startTime, setStartTime] = useState<number | null>(null)
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
-      setIsDownloading(false)
-      setProgress(0)
-      setCurrentTrack(null)
-      setProcessedCount(0)
       setStatus("idle")
-      setError(null)
-      setEstimatedTimeRemaining(null)
-      setStartTime(null)
     }
   }, [isOpen])
 
   // Filter out tracks without YouTube IDs
-  const downloadableTracks = tracks.filter((track) => track.youtubeId && track.verified)
+  const downloadableTracks = tracks.filter((track) => track.youtubeId)
 
-  // Download tracks individually in sequence
-  const downloadTracksSequentially = async () => {
+  const downloadZip = async () => {
     if (downloadableTracks.length === 0) return
 
-    console.log(`[ZipModal] Starting sequential download for ${downloadableTracks.length} tracks`)
-    setIsDownloading(true)
+    console.log(`[ZipModal] Starting ZIP download for ${downloadableTracks.length} tracks`)
+    const abortController = startDownload()
     setStatus("downloading")
-    setStartTime(Date.now())
-    setProgress(0)
-    setProcessedCount(0)
-    setError(null)
 
-    // Process each track
-    for (let i = 0; i < downloadableTracks.length; i++) {
-      const track = downloadableTracks[i]
-      setCurrentTrack(track.name)
+    let accumulatedData = '';
+    let isCompleteEvent = false;
 
-      try {
-        // Update progress
-        const newProgress = Math.floor(((i + 0.5) / downloadableTracks.length) * 100)
-        setProgress(newProgress)
-        setProcessedCount(i)
+    try {
+      // Call our ZIP download endpoint
+      const response = await fetch('/api/zip-download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tracks: downloadableTracks }),
+        signal: abortController.signal
+      })
 
-        // Calculate estimated time remaining
-        if (startTime) {
-          const elapsedMs = Date.now() - startTime
-          const msPerTrack = elapsedMs / (i + 1)
-          const tracksRemaining = downloadableTracks.length - (i + 1)
-          const msRemaining = msPerTrack * tracksRemaining
-
-          // Format time remaining
-          let timeString = "Less than a minute"
-          if (msRemaining > 60000) {
-            const minutes = Math.ceil(msRemaining / 60000)
-            timeString = `About ${minutes} minute${minutes > 1 ? "s" : ""}`
-          }
-
-          setEstimatedTimeRemaining(timeString)
-        }
-
-        // Create the download URL using our direct download endpoint
-        const downloadUrl = `/api/direct-download?videoId=${track.youtubeId}&title=${encodeURIComponent(track.name)}&artist=${encodeURIComponent(track.artists.join(", "))}&direct=true`
-
-        // Create a hidden anchor element to trigger the download
-        const downloadLink = document.createElement("a")
-        downloadLink.href = downloadUrl
-        downloadLink.download = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`
-        document.body.appendChild(downloadLink)
-
-        // Trigger the download
-        console.log(`[ZipModal] Initiating download for track "${track.name}"`)
-        downloadLink.click()
-
-        // Clean up
-        document.body.removeChild(downloadLink)
-
-        // Wait a bit before proceeding to the next track
-        await new Promise((resolve) => setTimeout(resolve, 2000))
-      } catch (error) {
-        console.error(`[ZipModal] Error downloading track "${track.name}":`, error)
-        // Continue with next track even if one fails
+      if (!response.ok) {
+        throw new Error(`Failed to start download: ${response.status} ${response.statusText}`)
       }
-    }
 
-    // Complete the process
-    setProgress(100)
-    setProcessedCount(downloadableTracks.length)
-    setCurrentTrack(null)
-    setStatus("complete")
-    setIsDownloading(false)
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error('Unable to read response')
+      }
+
+      // Process the stream
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        // Decode the chunk
+        const chunk = decoder.decode(value)
+        
+        // Check if this is a progress update or the complete event
+        if (chunk.includes('"type":"complete"')) {
+          isCompleteEvent = true;
+          accumulatedData += chunk;
+        } else if (!isCompleteEvent) {
+          try {
+            // Try to parse as a progress update
+            const events = chunk.split('\n\n')
+            for (const event of events) {
+              if (!event.trim() || !event.startsWith('data: ')) continue
+              const data = JSON.parse(event.slice(5))
+              
+              if (data.type === 'error') {
+                console.error('[ZipModal] Received error:', data.message);
+                setDownloadState({
+                  error: data.message,
+                  isDownloading: false
+                })
+                setStatus("error")
+                return
+              }
+
+              if (data.progress !== undefined) {
+                console.log('[ZipModal] Progress update:', data.progress + '%');
+                setDownloadState({
+                  progress: data.progress,
+                  currentTrack: data.currentTrack,
+                  processedCount: data.processed,
+                  totalTracks: data.total
+                })
+              }
+            }
+          } catch (e) {
+            // Ignore parsing errors for progress updates
+          }
+        } else {
+          // Accumulate data chunks
+          accumulatedData += chunk;
+        }
+      }
+
+      // Process the complete ZIP data
+      if (isCompleteEvent && accumulatedData) {
+        try {
+          // Extract the data array from the accumulated string
+          const startMarker = '"data":[';
+          const startIndex = accumulatedData.indexOf(startMarker) + startMarker.length;
+          const endIndex = accumulatedData.lastIndexOf(']');
+          
+          if (startIndex > 0 && endIndex > startIndex) {
+            const dataArrayStr = accumulatedData.slice(startIndex, endIndex);
+            const dataArray = dataArrayStr.split(',').map(Number);
+            
+            // Create the ZIP file
+            const zipData = new Uint8Array(dataArray);
+            console.log('[ZipModal] Created Uint8Array with length:', zipData.length);
+            
+            const blob = new Blob([zipData], { type: 'application/zip' });
+            console.log('[ZipModal] Created blob with size:', blob.size);
+            
+            const url = URL.createObjectURL(blob);
+            console.log('[ZipModal] Created object URL:', url);
+            
+            // Create and trigger download
+            const a = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `spotify-tracks-${timestamp}.zip`;
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            
+            document.body.appendChild(a);
+            console.log('[ZipModal] Triggering download for:', filename);
+            a.click();
+            
+            setTimeout(() => {
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              console.log('[ZipModal] Cleaned up download resources');
+            }, 1000);
+            
+            setDownloadState({
+              progress: 100,
+              isDownloading: false,
+              currentTrack: null,
+              processedCount: totalTracks,
+            });
+            setStatus("complete");
+            console.log('[ZipModal] Download process completed successfully');
+          } else {
+            throw new Error('Could not find ZIP data markers in response');
+          }
+        } catch (error) {
+          console.error('[ZipModal] Error processing ZIP data:', error);
+          setDownloadState({
+            error: 'Failed to process ZIP file. Please try again.',
+            isDownloading: false
+          });
+          setStatus("error");
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[ZipModal] Download cancelled')
+        return
+      }
+
+      console.error('[ZipModal] Error downloading ZIP:', error)
+      setDownloadState({
+        error: error instanceof Error ? error.message : 'Failed to download ZIP file',
+        isDownloading: false
+      })
+      setStatus("error")
+    }
+  }
+
+  // Allow closing the modal while download is in progress
+  const handleClose = () => {
+    if (!isDownloading) {
+      onClose()
+    } else {
+      // Just hide the modal but keep the download running
+      onClose()
+    }
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="text-lg">Download All Tracks ({downloadableTracks.length})</DialogTitle>
@@ -125,18 +217,18 @@ export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloa
             <>
               <Alert>
                 <AlertDescription>
-                  This will download all {downloadableTracks.length} verified tracks individually. Each track will open
-                  in a new tab.
+                  This will download all {downloadableTracks.length} tracks as a single ZIP file.
+                  The process may take a few minutes. You can close this window while downloading.
                 </AlertDescription>
               </Alert>
 
               <Button
-                onClick={downloadTracksSequentially}
+                onClick={downloadZip}
                 disabled={isDownloading || downloadableTracks.length === 0}
                 className="w-full"
               >
                 <Download className="mr-2 h-4 w-4" />
-                Download All Tracks
+                Download ZIP
               </Button>
             </>
           )}
@@ -145,32 +237,32 @@ export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloa
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <div>
-                  <h3 className="font-medium">Downloading tracks...</h3>
+                  <h3 className="font-medium">Creating ZIP file...</h3>
                   <p className="text-sm text-gray-500">
-                    {processedCount} of {downloadableTracks.length} tracks processed
+                    {currentTrack ? (
+                      <>Processing: {currentTrack}</>
+                    ) : (
+                      <>Please wait while we process your tracks</>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {processedCount} of {totalTracks} tracks processed
                   </p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={onClose} disabled={isDownloading}>
+                <Button variant="ghost" size="sm" onClick={handleClose}>
                   <X className="h-4 w-4" />
                 </Button>
               </div>
 
               <Progress value={progress} className="h-2" />
 
-              {currentTrack && (
-                <p className="text-sm text-gray-600 flex items-center">
-                  <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                  Processing: {currentTrack}
-                </p>
-              )}
-
-              {estimatedTimeRemaining && (
-                <p className="text-xs text-gray-500">Estimated time remaining: {estimatedTimeRemaining}</p>
-              )}
+              <div className="flex items-center justify-center">
+                <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+              </div>
 
               <Alert>
                 <AlertDescription>
-                  Please allow pop-ups in your browser. Each track will open in a new tab.
+                  You can close this window. The download will continue in the background.
                 </AlertDescription>
               </Alert>
             </div>
@@ -178,16 +270,17 @@ export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloa
 
           {status === "complete" && (
             <div className="space-y-4">
-              <Alert variant="success" className="bg-green-50 text-green-800 border-green-200">
-                <CheckCircle2 className="h-4 w-4" />
-                <AlertDescription>All download processes have been initiated!</AlertDescription>
-              </Alert>
-
-              <div className="flex justify-end">
-                <Button variant="outline" onClick={onClose}>
-                  Close
-                </Button>
+              <div className="flex items-center gap-2 text-green-600">
+                <CheckCircle2 className="h-5 w-5" />
+                <span>Download Complete!</span>
               </div>
+              <p className="text-sm text-gray-500">
+                If your download hasn't started automatically, click the button below.
+              </p>
+              <Button onClick={downloadZip} className="w-full">
+                <Download className="mr-2 h-4 w-4" />
+                Download Again
+              </Button>
             </div>
           )}
 
@@ -196,15 +289,15 @@ export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloa
               <Alert variant="destructive">
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  {error || "Failed to download tracks. Please try downloading them individually."}
+                  {error || "Failed to create ZIP file. Please try downloading tracks individually."}
                 </AlertDescription>
               </Alert>
 
               <div className="flex justify-between">
-                <Button variant="outline" onClick={onClose}>
+                <Button variant="outline" onClick={handleClose}>
                   Close
                 </Button>
-                <Button onClick={downloadTracksSequentially}>Try Again</Button>
+                <Button onClick={downloadZip}>Try Again</Button>
               </div>
             </div>
           )}
