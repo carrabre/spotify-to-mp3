@@ -693,38 +693,42 @@ export default function SpotifyConverter() {
   const verifiedTracksCount = tracks.filter((track) => track.youtubeId && track.verified).length
 
   return (
-    <div className="space-y-6">
-      <Card>
+    <div className="space-y-8">
+      <Card className="bg-white/80 dark:bg-gray-800/50 border-0 backdrop-blur-lg shadow-xl">
         <CardContent className="pt-6">
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex flex-col sm:flex-row gap-4">
               <div className="relative flex-1">
-                <Music className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <Music className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" size={20} />
                 <Input
                   placeholder="Paste Spotify URL (track, album or playlist)"
                   value={spotifyUrl}
                   onChange={(e) => setSpotifyUrl(e.target.value)}
-                  className="pl-10"
+                  className="pl-12 h-12 text-lg bg-white/50 dark:bg-gray-900/50 border-2 border-gray-200 dark:border-gray-700 focus:border-green-500 dark:focus:border-green-400 transition-colors rounded-xl"
                   disabled={loading}
                 />
               </div>
-              <Button type="submit" disabled={loading || !spotifyUrl}>
+              <Button 
+                type="submit" 
+                disabled={loading || !spotifyUrl}
+                className="h-12 px-8 text-lg bg-green-500 hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 text-white rounded-xl transition-colors"
+              >
                 {loading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                     Processing
                   </>
                 ) : (
                   <>
-                    <Search className="mr-2 h-4 w-4" />
+                    <Search className="mr-2 h-5 w-5" />
                     Convert
                   </>
                 )}
               </Button>
             </div>
             {loading && processingStatus && (
-              <div className="text-sm text-gray-500 mt-2 flex items-center">
-                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+              <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 flex items-center animate-pulse">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 {processingStatus}
               </div>
             )}
@@ -733,64 +737,72 @@ export default function SpotifyConverter() {
       </Card>
 
       {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+        <Alert variant="destructive" className="bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800">
+          <AlertCircle className="h-5 w-5" />
+          <AlertDescription className="text-red-800 dark:text-red-200">{error}</AlertDescription>
         </Alert>
       )}
 
       {warning && (
-        <Alert variant="warning" className="bg-amber-50 text-amber-800 border-amber-200">
-          <Info className="h-4 w-4" />
-          <AlertDescription>{warning}</AlertDescription>
+        <Alert className="bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
+          <Info className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+          <AlertDescription className="text-amber-800 dark:text-amber-200">{warning}</AlertDescription>
         </Alert>
       )}
 
       {autoMatchingInProgress && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
-          <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">
-            <span>Automatically matching tracks with YouTube videos...</span>
-            <span>{autoMatchingProgress}%</span>
+        <div className="bg-white/80 dark:bg-gray-800/50 backdrop-blur-lg rounded-xl p-6 shadow-lg border border-gray-200 dark:border-gray-700">
+          <div className="flex justify-between text-base text-gray-600 dark:text-gray-400 mb-3">
+            <span className="flex items-center">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Automatically matching tracks with YouTube videos...
+            </span>
+            <span className="font-medium">{autoMatchingProgress}%</span>
           </div>
-          <Progress value={autoMatchingProgress} className="h-2" />
+          <Progress value={autoMatchingProgress} className="h-2 bg-gray-200 dark:bg-gray-700">
+            <div 
+              className="h-full bg-green-500 dark:bg-green-400 rounded-full transition-all duration-500"
+              style={{ width: `${autoMatchingProgress}%` }}
+            />
+          </Progress>
         </div>
       )}
 
       {tracks.length > 0 && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold">
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="flex items-center gap-4">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
                 {tracks.length} {tracks.length === 1 ? "Track" : "Tracks"} Found
               </h2>
               {verifiedTracksCount > 0 && (
-                <Button variant="default" className="bg-green-600 hover:bg-green-700" onClick={handleOpenZipModal}>
-                  <Package className="mr-2 h-4 w-4" />
+                <Button 
+                  variant="default" 
+                  className="bg-green-500 hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 text-white shadow-lg hover:shadow-xl transition-all" 
+                  onClick={handleOpenZipModal}
+                >
+                  <Package className="mr-2 h-5 w-5" />
                   Download All ({verifiedTracksCount})
                 </Button>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-3">
               {!autoMatchingInProgress && tracks.some((track) => !track.verified) && (
-                <Button variant="outline" onClick={handleAutoMatchAll}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
+                <Button 
+                  variant="outline" 
+                  onClick={handleAutoMatchAll}
+                  className="border-2 hover:border-green-500 hover:text-green-600 dark:hover:border-green-400 dark:hover:text-green-400 transition-colors"
+                >
+                  <RefreshCw className="mr-2 h-5 w-5" />
                   Auto-Match All
                 </Button>
               )}
-              {!autoMatchingInProgress && (
-                <>
-                  <Button variant="outline" onClick={testSYtdl} className="mr-2">
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Test API
-                  </Button>
-                  <Button variant="outline" onClick={runDiagnosticTest}>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Run Diagnostics
-                  </Button>
-                </>
-              )}
-              <Button variant="outline" onClick={handleExportExcel}>
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
+              <Button 
+                variant="outline" 
+                onClick={handleExportExcel}
+                className="border-2 hover:border-blue-500 hover:text-blue-600 dark:hover:border-blue-400 dark:hover:text-blue-400 transition-colors"
+              >
+                <FileSpreadsheet className="mr-2 h-5 w-5" />
                 Export to Excel
               </Button>
             </div>
@@ -805,39 +817,33 @@ export default function SpotifyConverter() {
               downloadProgress={downloadProgress}
               downloadErrors={downloadErrors}
             />
-
-            <div className="mb-4 text-sm text-gray-600 dark:text-gray-400 p-3 bg-gray-100 dark:bg-gray-700 rounded-md">
-              <p>
-                <strong>Note:</strong> Downloads will open in a new tab. If you encounter any issues, try the retry
-                options.
-              </p>
-              <p className="mt-1">
-                <strong>Tip:</strong> Using quality "4" (192 kbps) provides the best audio quality. If downloads fail,
-                try quality "3" (128 kbps) which is more reliable.
-              </p>
-            </div>
           </div>
         </div>
       )}
 
-      {/* YouTube Search Modal */}
+      {/* Modals */}
       {currentTrack && (
-        <YouTubeSearchModal
-          isOpen={searchModalOpen}
-          onClose={() => setSearchModalOpen(false)}
-          trackName={currentTrack.name}
-          artistName={currentTrack.artists.join(" ")}
-          onSelectVideo={handleSelectVideo}
-        />
+        <>
+          <YouTubeSearchModal
+            isOpen={searchModalOpen}
+            onClose={() => setSearchModalOpen(false)}
+            trackName={currentTrack.name}
+            artistName={currentTrack.artists.join(" ")}
+            onSelectVideo={handleSelectVideo}
+          />
+          <DownloadModal 
+            isOpen={downloadModalOpen} 
+            onClose={() => setDownloadModalOpen(false)} 
+            track={currentTrack} 
+          />
+        </>
       )}
 
-      {/* Download Modal */}
-      {currentTrack && (
-        <DownloadModal isOpen={downloadModalOpen} onClose={() => setDownloadModalOpen(false)} track={currentTrack} />
-      )}
-
-      {/* ZIP Download Modal */}
-      <ZipDownloadModal isOpen={zipModalOpen} onClose={() => setZipModalOpen(false)} tracks={tracks} />
+      <ZipDownloadModal 
+        isOpen={zipModalOpen} 
+        onClose={() => setZipModalOpen(false)} 
+        tracks={tracks} 
+      />
     </div>
   )
 }
