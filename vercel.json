@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "app/api/mp3-transcode/**": {
+      "includeFiles": "node_modules/ffmpeg-static/ffmpeg*",
+      "memory": 1024,
+      "maxDuration": 300
+    }
+  }
+}
