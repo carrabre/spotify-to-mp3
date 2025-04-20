@@ -82,35 +82,61 @@ export async function GET(req: NextRequest) {
         audioData = await throttledTranscode(videoId)
         console.log(`[API:transcode][${requestId}] Primary transcode method succeeded`)
       } catch (primaryError) {
-        // If the primary method fails and we're on Vercel, try the fallback method
+        // If the primary method fails, try the fallback method
         console.error(`[API:transcode][${requestId}] Primary transcode failed:`, primaryError)
         
-        if (isVercelEnvironment) {
-          console.log(`[API:transcode][${requestId}] Attempting fallback s-ytdl method...`)
+        console.log(`[API:transcode][${requestId}] Attempting new direct downloader method...`)
+        
+        try {
+          // Use our new direct downloader that doesn't rely on s-ytdl
+          const { downloadWithFallback } = await import('@/lib/direct-downloader')
+          audioData = await downloadWithFallback(videoId)
+          console.log(`[API:transcode][${requestId}] Direct downloader method succeeded`)
+        } catch (directError) {
+          console.error(`[API:transcode][${requestId}] Direct downloader failed:`, directError)
           
-          // Use the s-ytdl method as a fallback
-          const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`
-          const tempDir = path.join(os.tmpdir(), "fallback-transcode")
-          
-          if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true })
+          // As a last resort, try the old s-ytdl method, but catch any DNS errors
+          if (isVercelEnvironment) {
+            try {
+              console.log(`[API:transcode][${requestId}] Attempting fallback s-ytdl method...`)
+              
+              // Use the s-ytdl method as a fallback
+              const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`
+              const tempDir = path.join(os.tmpdir(), "fallback-transcode")
+              
+              if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true })
+              }
+              
+              // Download using s-ytdl
+              const audioBuffer = await SYTDL.dl(youtubeUrl, "4", "audio")
+              console.log(`[API:transcode][${requestId}] s-ytdl download complete, size: ${audioBuffer.length}`)
+              
+              // We'll return the audio as-is since it's likely already in a compatible format
+              audioData = {
+                buffer: audioBuffer,
+                size: audioBuffer.length,
+                mimeType: 'audio/mpeg' // This might not be accurate, but browsers can usually detect the format
+              }
+              
+              console.log(`[API:transcode][${requestId}] Fallback method succeeded`)
+            } catch (sytdlError: any) {
+              // If we get a DNS error, send a more helpful error message
+              if (sytdlError.message && (
+                sytdlError.message.includes('ENOTFOUND') || 
+                sytdlError.message.includes('getaddrinfo')
+              )) {
+                console.error(`[API:transcode][${requestId}] DNS resolution error in s-ytdl:`, sytdlError)
+                throw new Error('Unable to resolve necessary domains. Please try the alternative download options.')
+              }
+              
+              // Otherwise just rethrow the original error
+              throw sytdlError
+            }
+          } else {
+            // If not on Vercel, just rethrow the error
+            throw directError
           }
-          
-          // Download using s-ytdl
-          const audioBuffer = await SYTDL.dl(youtubeUrl, "4", "audio")
-          console.log(`[API:transcode][${requestId}] s-ytdl download complete, size: ${audioBuffer.length}`)
-          
-          // We'll return the audio as-is since it's likely already in a compatible format
-          audioData = {
-            buffer: audioBuffer,
-            size: audioBuffer.length,
-            mimeType: 'audio/mpeg' // This might not be accurate, but browsers can usually detect the format
-          }
-          
-          console.log(`[API:transcode][${requestId}] Fallback method succeeded`)
-        } else {
-          // If not on Vercel, just rethrow the error
-          throw primaryError
         }
       }
       

@@ -58,134 +58,180 @@ export async function GET(req: NextRequest) {
     // Track whether we're using the simpler method without FFmpeg
     let usedSimpleMethod = false
 
-    // 1) Download audio using s-ytdl
-    console.log(`[mp3-transcode][${requestId}] Downloading audio with s-ytdl`)
-    let audioBuffer: Buffer
-
+    // Try downloading with our direct downloader first
+    console.log(`[mp3-transcode][${requestId}] Attempting direct downloader...`)
+    let audioBuffer: Buffer;
+    
     try {
-      audioBuffer = await SYTDL.dl(`https://www.youtube.com/watch?v=${videoId}`, "4", "audio")
-      console.log(`[mp3-transcode][${requestId}] Download complete, buffer size: ${audioBuffer.length} bytes`)
-
-      // Check if FFmpeg is available
-      if (!ffmpegStatic && isVercelEnvironment) {
-        console.warn(`[mp3-transcode][${requestId}] FFmpeg not available in this environment, using direct audio data`)
-        usedSimpleMethod = true
+      // Import and use the direct downloader
+      const { downloadWithFallback } = await import('@/lib/direct-downloader')
+      const result = await downloadWithFallback(videoId);
+      audioBuffer = result.buffer;
+      console.log(`[mp3-transcode][${requestId}] Direct download complete, size: ${audioBuffer.length} bytes`);
+      
+      // If the format isn't MP3 and FFmpeg is available, we'll transcode it
+      const needsTranscoding = !result.mimeType.includes('mp3') && ffmpegStatic;
+      
+      if (!needsTranscoding) {
+        console.log(`[mp3-transcode][${requestId}] No transcoding needed, using direct audio data`);
+        usedSimpleMethod = true;
       } else {
-        // Write to temp file
-        const inFile = path.join(tempDir, `${requestId}_input.webm`)
-        fs.writeFileSync(inFile, audioBuffer)
-        console.log(`[mp3-transcode][${requestId}] Wrote input file: ${inFile}`)
-
-        // 2) Transcode to MP3 with FFmpeg
-        console.log(`[mp3-transcode][${requestId}] Starting FFmpeg transcoding`)
-        await new Promise<void>((resolve, reject) => {
-          execFile(
-            ffmpegStatic!,
-            [
-              "-i",
-              inFile,
-              "-codec:a",
-              "libmp3lame",
-              "-qscale:a",
-              "2",
-              "-write_xing",
-              "1",
-              "-id3v2_version",
-              "3",
-              "-metadata",
-              `title=${title}`,
-              "-metadata",
-              `artist=${artist}`,
-              outFile,
-            ],
-            (error, stdout, stderr) => {
-              console.log(`[mp3-transcode][${requestId}] FFmpeg stdout:`, stdout)
-              console.log(`[mp3-transcode][${requestId}] FFmpeg stderr:`, stderr)
-
-              if (error) {
-                console.error(`[mp3-transcode][${requestId}] FFmpeg error:`, error)
-                reject(new Error(stderr))
-                return
-              }
-
-              resolve()
-            },
-          )
-        })
-
-        // 3) Verify the output file exists and has content
-        if (!fs.existsSync(outFile)) {
-          throw new Error(`Output file does not exist: ${outFile}`)
-        }
-
-        const fileStats = fs.statSync(outFile)
-        console.log(`[mp3-transcode][${requestId}] Output file size: ${fileStats.size} bytes`)
-
-        if (fileStats.size === 0) {
-          throw new Error("Output file is empty")
-        }
-
-        // 4) Read the file and prepare to send it
-        audioBuffer = fs.readFileSync(outFile)
-        console.log(`[mp3-transcode][${requestId}] Read ${audioBuffer.length} bytes from output file`)
-
-        // 5) Clean up temp files
+        // We need to transcode the audio
+        const inFile = path.join(tempDir, `${requestId}_input.webm`);
+        fs.writeFileSync(inFile, audioBuffer);
+        console.log(`[mp3-transcode][${requestId}] Wrote input file: ${inFile}`);
+        
+        // Continue with FFmpeg transcoding...
+        await transcodeWithFFmpeg(inFile, outFile, title, artist, requestId);
+        
+        // Read the transcoded file
+        audioBuffer = fs.readFileSync(outFile);
+        console.log(`[mp3-transcode][${requestId}] Read ${audioBuffer.length} bytes from transcoded file`);
+        
+        // Clean up temp files
         try {
-          fs.unlinkSync(path.join(tempDir, `${requestId}_input.webm`))
-          fs.unlinkSync(outFile)
-          console.log(`[mp3-transcode][${requestId}] Cleaned up temp files`)
+          fs.unlinkSync(inFile);
+          fs.unlinkSync(outFile);
+          console.log(`[mp3-transcode][${requestId}] Cleaned up temp files`);
         } catch (cleanupError) {
-          console.error(`[mp3-transcode][${requestId}] Error cleaning up temp files:`, cleanupError)
+          console.error(`[mp3-transcode][${requestId}] Error cleaning up temp files:`, cleanupError);
         }
       }
-
-      // 6) Return the MP3 data with proper headers
-      console.log(`[mp3-transcode][${requestId}] Sending audio response with size: ${audioBuffer.length} bytes, method: ${usedSimpleMethod ? 'direct' : 'transcoded'}`)
-
-      // IMPORTANT: Set the correct headers to ensure the browser treats this as a download
-      const headers = new Headers()
-      headers.set("Content-Type", usedSimpleMethod ? "audio/webm" : "audio/mpeg")
-      headers.set("Content-Disposition", `attachment; filename="${sanitizedFilename}"`)
-      headers.set("Content-Length", audioBuffer.length.toString())
-      headers.set("Cache-Control", "no-store, no-cache")
-
-      console.log(`[mp3-transcode][${requestId}] Response headers:`, {
-        contentType: headers.get("Content-Type"),
-        contentDisposition: headers.get("Content-Disposition"),
-        contentLength: headers.get("Content-Length")
-      })
-
-      // Return the binary data directly
-      return new NextResponse(audioBuffer, {
-        status: 200,
-        headers,
-      })
-    } catch (downloadError) {
-      console.error(`[mp3-transcode][${requestId}] Error in s-ytdl or FFmpeg:`, downloadError)
-
-      // Return a proper error response with explicit content type
-      return NextResponse.json({
-        error: "Download failed",
-        message: "The direct download method failed. Please try alternative download options.",
-        details: downloadError instanceof Error ? downloadError.message : String(downloadError),
-        timestamp: new Date().toISOString()
-      }, { 
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      })
+    } catch (directError) {
+      console.error(`[mp3-transcode][${requestId}] Direct downloader failed:`, directError);
+      
+      // Fall back to s-ytdl as a last resort
+      try {
+        console.log(`[mp3-transcode][${requestId}] Falling back to s-ytdl...`);
+        audioBuffer = await SYTDL.dl(`https://www.youtube.com/watch?v=${videoId}`, "4", "audio");
+        console.log(`[mp3-transcode][${requestId}] s-ytdl download complete, size: ${audioBuffer.length} bytes`);
+        
+        // Check if FFmpeg is available
+        if (!ffmpegStatic && isVercelEnvironment) {
+          console.warn(`[mp3-transcode][${requestId}] FFmpeg not available in this environment, using direct audio data`);
+          usedSimpleMethod = true;
+        } else {
+          // Write to temp file
+          const inFile = path.join(tempDir, `${requestId}_input.webm`);
+          fs.writeFileSync(inFile, audioBuffer);
+          console.log(`[mp3-transcode][${requestId}] Wrote input file: ${inFile}`);
+          
+          // Transcode with FFmpeg
+          await transcodeWithFFmpeg(inFile, outFile, title, artist, requestId);
+          
+          // Read the transcoded file
+          audioBuffer = fs.readFileSync(outFile);
+          console.log(`[mp3-transcode][${requestId}] Read ${audioBuffer.length} bytes from transcoded file`);
+          
+          // Clean up temp files
+          try {
+            fs.unlinkSync(inFile);
+            fs.unlinkSync(outFile);
+            console.log(`[mp3-transcode][${requestId}] Cleaned up temp files`);
+          } catch (cleanupError) {
+            console.error(`[mp3-transcode][${requestId}] Error cleaning up temp files:`, cleanupError);
+          }
+        }
+      } catch (sytdlError: any) {
+        // Check for DNS errors
+        if (sytdlError.message && (
+          sytdlError.message.includes('ENOTFOUND') || 
+          sytdlError.message.includes('getaddrinfo')
+        )) {
+          console.error(`[mp3-transcode][${requestId}] DNS resolution error in s-ytdl:`, sytdlError);
+          throw new Error('Unable to resolve domains needed for download. Please try the alternative download options.');
+        }
+        
+        // Not a DNS error, rethrow
+        throw sytdlError;
+      }
     }
+
+    // Return the audio data with proper headers
+    console.log(`[mp3-transcode][${requestId}] Sending audio response with size: ${audioBuffer.length} bytes, method: ${usedSimpleMethod ? 'direct' : 'transcoded'}`);
+
+    // IMPORTANT: Set the correct headers to ensure the browser treats this as a download
+    const headers = new Headers()
+    headers.set("Content-Type", usedSimpleMethod ? "audio/webm" : "audio/mpeg")
+    headers.set("Content-Disposition", `attachment; filename="${sanitizedFilename}"`)
+    headers.set("Content-Length", audioBuffer.length.toString())
+    headers.set("Cache-Control", "no-store, no-cache")
+
+    console.log(`[mp3-transcode][${requestId}] Response headers:`, {
+      contentType: headers.get("Content-Type"),
+      contentDisposition: headers.get("Content-Disposition"),
+      contentLength: headers.get("Content-Length")
+    })
+
+    // Return the binary data directly
+    return new NextResponse(audioBuffer, {
+      status: 200,
+      headers,
+    })
   } catch (error) {
-    console.error(`[mp3-transcode][${requestId}] Error:`, error)
+    console.error(`[mp3-transcode][${requestId}] Error:`, error);
 
     // Return an error response with explicit content type
     return NextResponse.json({
       error: "Download failed",
-      message: "The download process encountered an error. Please try alternative download options.",
+      message: error instanceof Error ? error.message : "The download process encountered an error. Please try alternative download options.",
       details: error instanceof Error ? error.message : String(error),
       timestamp: new Date().toISOString()
     }, { 
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     })
+  }
+}
+
+// Helper function to transcode with FFmpeg
+async function transcodeWithFFmpeg(inFile: string, outFile: string, title: string, artist: string, requestId: string): Promise<void> {
+  console.log(`[mp3-transcode][${requestId}] Starting FFmpeg transcoding`);
+  
+  return new Promise<void>((resolve, reject) => {
+    execFile(
+      ffmpegStatic!,
+      [
+        "-i",
+        inFile,
+        "-codec:a",
+        "libmp3lame",
+        "-qscale:a",
+        "2",
+        "-write_xing",
+        "1",
+        "-id3v2_version",
+        "3",
+        "-metadata",
+        `title=${title}`,
+        "-metadata",
+        `artist=${artist}`,
+        outFile,
+      ],
+      (error, stdout, stderr) => {
+        console.log(`[mp3-transcode][${requestId}] FFmpeg stdout:`, stdout);
+        console.log(`[mp3-transcode][${requestId}] FFmpeg stderr:`, stderr);
+
+        if (error) {
+          console.error(`[mp3-transcode][${requestId}] FFmpeg error:`, error);
+          reject(new Error(stderr));
+          return;
+        }
+
+        resolve();
+      },
+    );
+  });
+  
+  // Verify the output file exists and has content
+  if (!fs.existsSync(outFile)) {
+    throw new Error(`Output file does not exist: ${outFile}`);
+  }
+
+  const fileStats = fs.statSync(outFile);
+  console.log(`[mp3-transcode][${requestId}] Output file size: ${fileStats.size} bytes`);
+
+  if (fileStats.size === 0) {
+    throw new Error("Output file is empty");
   }
 }
