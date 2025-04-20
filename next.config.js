@@ -12,6 +12,15 @@ const nextConfig = {
     SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET,
     YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
   },
+  serverRuntimeConfig: {
+    // Runtime configs that are only available on the server side
+    SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID,
+    SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET,
+  },
+  publicRuntimeConfig: {
+    // Config that is available on both server and client (but don't put secrets here)
+    NODE_ENV: process.env.NODE_ENV,
+  },
   images: {
     remotePatterns: [
       {

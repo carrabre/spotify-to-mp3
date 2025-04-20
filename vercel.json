@@ -1,25 +1,30 @@
 {
-  "regions": ["iad1"],
+  "regions": ["sfo1", "iad1", "sin1"],
   "functions": {
     "app/api/**/*": {
-      "memory": 3008,
-      "maxDuration": 60
+      "memory": 3009,
+      "maxDuration": 800,
+      "runtime": "nodejs18.x"
     },
     "app/api/transcode": {
-      "memory": 3008,
-      "maxDuration": 60
+      "memory": 3009,
+      "maxDuration": 800,
+      "runtime": "nodejs18.x"
     },
     "app/api/mp3-download/**/*": {
-      "memory": 3008,
-      "maxDuration": 60
+      "memory": 3009,
+      "maxDuration": 800,
+      "runtime": "nodejs18.x"
     },
     "app/api/zip-download/**/*": {
-      "memory": 3008,
-      "maxDuration": 60
+      "memory": 3009,
+      "maxDuration": 800,
+      "runtime": "nodejs18.x"
     },
     "app/api/youtube/**/*": {
-      "memory": 3008,
-      "maxDuration": 60
+      "memory": 3009,
+      "maxDuration": 800,
+      "runtime": "nodejs18.x"
     }
   },
   "headers": [
@@ -55,6 +60,11 @@
     "env": {
       "NEXT_PUBLIC_VERCEL_ENV": "production"
     }
+  },
+  "env": {
+    "SPOTIFY_CLIENT_ID": "@spotify_client_id",
+    "SPOTIFY_CLIENT_SECRET": "@spotify_client_secret",
+    "YOUTUBE_API_KEY": "@youtube_api_key"
   },
   "buildCommand": "npm ci --legacy-peer-deps && npm run build"
 }

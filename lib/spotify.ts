@@ -1,18 +1,94 @@
 import type { Track, SpotifyTokenResponse, SpotifyTrack, SpotifyPlaylist, SpotifyAlbum } from "./types"
+import getConfig from 'next/config'
+
+// Load environment variables from multiple potential sources
+function loadEnvVariables() {
+  // Create debug info object to track where vars are found
+  const debugInfo = {
+    sources: [] as string[],
+    found: false
+  };
+
+  // Check direct process.env first (most common)
+  let clientId = process.env.SPOTIFY_CLIENT_ID;
+  let clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  
+  if (clientId && clientSecret) {
+    debugInfo.sources.push('process.env');
+    debugInfo.found = true;
+    return { clientId, clientSecret, debugInfo };
+  }
+
+  // Try Next.js config
+  try {
+    const nextConfig = getConfig();
+    if (nextConfig) {
+      debugInfo.sources.push('next/config');
+      
+      // Check serverRuntimeConfig
+      if (nextConfig.serverRuntimeConfig) {
+        if (!clientId && nextConfig.serverRuntimeConfig.SPOTIFY_CLIENT_ID) {
+          clientId = nextConfig.serverRuntimeConfig.SPOTIFY_CLIENT_ID;
+        }
+        if (!clientSecret && nextConfig.serverRuntimeConfig.SPOTIFY_CLIENT_SECRET) {
+          clientSecret = nextConfig.serverRuntimeConfig.SPOTIFY_CLIENT_SECRET;
+        }
+      }
+      
+      // Check env property
+      if (nextConfig.env) {
+        if (!clientId && nextConfig.env.SPOTIFY_CLIENT_ID) {
+          clientId = nextConfig.env.SPOTIFY_CLIENT_ID;
+        }
+        if (!clientSecret && nextConfig.env.SPOTIFY_CLIENT_SECRET) {
+          clientSecret = nextConfig.env.SPOTIFY_CLIENT_SECRET;
+        }
+      }
+    }
+  } catch (error) {
+    debugInfo.sources.push('next/config (failed)');
+    console.error("Error accessing Next.js config:", error);
+  }
+
+  // Check global object as a last resort (for Vercel edge functions)
+  if (typeof globalThis !== 'undefined') {
+    debugInfo.sources.push('globalThis');
+    if (!clientId && (globalThis as any).SPOTIFY_CLIENT_ID) {
+      clientId = (globalThis as any).SPOTIFY_CLIENT_ID;
+    }
+    if (!clientSecret && (globalThis as any).SPOTIFY_CLIENT_SECRET) {
+      clientSecret = (globalThis as any).SPOTIFY_CLIENT_SECRET;
+    }
+  }
+
+  // Fallback to hardcoded env vars in development ONLY if needed
+  if (process.env.NODE_ENV === 'development' && (!clientId || !clientSecret)) {
+    debugInfo.sources.push('fallback development values');
+    // Only use these in development, never in production
+    if (!clientId) clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || '';
+    if (!clientSecret) clientSecret = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_SECRET || '';
+  }
+
+  debugInfo.found = !!(clientId && clientSecret);
+  return { clientId, clientSecret, debugInfo };
+}
 
 // Get Spotify access token
 async function getSpotifyToken(): Promise<string> {
-  const clientId = process.env.SPOTIFY_CLIENT_ID
-  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET
+  // Load credentials from all possible sources
+  const { clientId, clientSecret, debugInfo } = loadEnvVariables();
 
   if (!clientId || !clientSecret) {
     console.error("SPOTIFY ENV DEBUG:", {
       clientIdExists: !!clientId,
       clientSecretExists: !!clientSecret,
+      sources: debugInfo.sources,
       processEnvKeys: Object.keys(process.env).filter(key => key.startsWith('SPOTIFY') || key.startsWith('NEXT')).join(', ')
     });
     throw new Error(`Spotify credentials are not configured. ClientID: ${clientId ? "Set" : "Missing"}, ClientSecret: ${clientSecret ? "Set" : "Missing"}`)
   }
+
+  console.log("Spotify credentials found via:", debugInfo.sources);
 
   const response = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
