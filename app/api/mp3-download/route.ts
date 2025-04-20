@@ -40,11 +40,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Video ID is required" }, { status: 400 })
   }
 
+  // TypeScript doesn't recognize the above check as type narrowing in this context
+  // so we need to create a new variable of the correct type
+  const safeVideoId = String(videoId)
+
   try {
-    console.log(`Starting MP3 download for video ID: ${videoId}`)
+    console.log(`Starting MP3 download for video ID: ${safeVideoId}`)
 
     // YouTube URL from video ID
-    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`
+    const youtubeUrl = `https://www.youtube.com/watch?v=${safeVideoId}`
 
     // Create a sanitized filename
     const sanitizedFilename = `${title.replace(/[^a-z0-9]/gi, "_")}${
@@ -92,7 +96,7 @@ export async function GET(request: NextRequest) {
         "0",
         "--embed-metadata",
         "--ffmpeg-location",
-        process.env.FFMPEG_PATH || ffmpegStatic,
+        (process.env.FFMPEG_PATH as string) || ffmpegStatic as string,
         "-o",
         outputPath,
         "--no-playlist",
@@ -148,12 +152,13 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("Error downloading MP3:", error)
 
-    // Try fallback method
-    return fallbackDownload(videoId, title, artist)
+    // Cast videoId to string explicitly in a way TypeScript will recognize
+    return fallbackDownload(videoId as unknown as string, title, artist)
   }
 }
 
 // Fallback download method using an external service
+// We know videoId has already been validated and is not null
 async function fallbackDownload(videoId: string, title: string, artist: string) {
   try {
     console.log(`Using fallback download method for video ID: ${videoId}`)

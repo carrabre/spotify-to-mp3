@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { searchYouTubeVideos } from "@/lib/youtube-search-service"
+import { searchYouTube } from "@/lib/youtube-search-service"
 import type { YouTubeVideo } from "@/lib/types"
 
 // Generate a deterministic but fake video ID based on the query
@@ -75,7 +75,7 @@ export async function GET(request: Request) {
 
   try {
     // Use the youtube-search-api to search for videos
-    const videos = await searchYouTubeVideos(query)
+    const videos = await searchYouTube(query)
 
     if (videos.length === 0) {
       // If no results found, return fallback results
@@ -99,7 +99,7 @@ export async function GET(request: Request) {
       .trim()
 
     try {
-      const videos = await searchYouTubeVideos(simplifiedQuery)
+      const videos = await searchYouTube(simplifiedQuery)
       if (videos.length > 0) {
         return NextResponse.json(videos)
       }

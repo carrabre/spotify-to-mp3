@@ -9,6 +9,8 @@ export interface Track {
   youtubeId: string | null
   youtubeTitle: string | null
   youtubeThumbnail: string | null
+  verified?: boolean
+  verificationAttempts?: number
 }
 
 export interface YouTubeVideo {

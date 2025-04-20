@@ -14,7 +14,15 @@ export async function GET() {
     // Check if ffmpeg-static is available and executable
     console.log(`[test-mp3][${requestId}] FFmpeg binary path: ${ffmpegStatic}`)
 
-    let ffmpegInfo = "Not available"
+    let ffmpegInfo: string | { 
+      path: string; 
+      exists?: boolean; 
+      isExecutable?: boolean; 
+      size?: number;
+      version?: string;
+      error?: string;
+    } = "Not available"
+    
     if (ffmpegStatic) {
       try {
         const stats = fs.statSync(ffmpegStatic)

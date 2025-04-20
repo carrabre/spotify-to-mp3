@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
           "0",
           "--embed-metadata",
           "--ffmpeg-location",
-          process.env.FFMPEG_PATH || ffmpegStatic,
+          (process.env.FFMPEG_PATH as string) || ffmpegStatic as string,
           "-o",
           outputPath,
           "--no-playlist",

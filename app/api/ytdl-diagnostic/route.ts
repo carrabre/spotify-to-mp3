@@ -13,7 +13,7 @@ export async function GET() {
     console.log(`[ytdl-diagnostic][${requestId}] Testing with URL: ${youtubeUrl}`)
 
     // Test different quality settings
-    const results = {}
+    const results: Record<string, any> = {}
     const qualities = ["1", "2", "3", "4"]
 
     for (const quality of qualities) {
@@ -56,11 +56,17 @@ export async function GET() {
     }
 
     // Test SYTDL version and capabilities
-    let sytdlInfo = "Unknown"
+    let sytdlInfo: string | { 
+      version: string; 
+      hasVersion: boolean;
+      hasDl: boolean;
+      [key: string]: any;
+    } = "Unknown"
+    
     try {
       sytdlInfo = {
-        version: SYTDL.version || "Unknown",
-        hasVersion: !!SYTDL.version,
+        version: "Unknown", // SYTDL doesn't expose version directly
+        hasVersion: false,
         hasDl: typeof SYTDL.dl === "function",
       }
     } catch (e) {

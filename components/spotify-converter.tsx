@@ -349,7 +349,10 @@ export default function SpotifyConverter() {
 
         // Check if any quality setting worked
         const workingQualities = Object.entries(data.results)
-          .filter(([_, result]) => result.success && result.hasUrl && result.urlAccessible)
+          .filter(([_, result]) => {
+            const typedResult = result as { success: boolean; hasUrl: boolean; urlAccessible: boolean };
+            return typedResult.success && typedResult.hasUrl && typedResult.urlAccessible;
+          })
           .map(([quality]) => quality)
 
         if (workingQualities.length > 0) {
@@ -407,7 +410,7 @@ export default function SpotifyConverter() {
 
             // Use fetch with blob() method to properly handle binary data
             fetch(downloadUrl)
-              .then(response => {
+              .then((response): Promise<Blob | undefined> => {
                 const contentType = response.headers.get('content-type');
                 
                 if (contentType && contentType.includes('application/json')) {
@@ -425,6 +428,7 @@ export default function SpotifyConverter() {
                     // Show download modal with alternative options
                     setCurrentTrack(track);
                     setDownloadModalOpen(true);
+                    return undefined;
                   });
                 } 
                 
@@ -554,7 +558,7 @@ export default function SpotifyConverter() {
 
           // Use fetch with blob() method to properly handle binary data
           fetch(downloadUrl)
-            .then(response => {
+            .then((response): Promise<Blob | undefined> => {
               const contentType = response.headers.get('content-type');
               
               if (contentType && contentType.includes('application/json')) {
@@ -572,6 +576,7 @@ export default function SpotifyConverter() {
                   // Show download modal with alternative options
                   setCurrentTrack(track);
                   setDownloadModalOpen(true);
+                  return undefined;
                 });
               } 
               

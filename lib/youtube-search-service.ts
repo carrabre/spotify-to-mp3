@@ -1,14 +1,13 @@
 import type { YouTubeVideo } from "./types"
 
-/**
- * Search for YouTube videos using the youtube-search-api package
- * @param query The search query
- * @param limit Maximum number of results to return
- * @returns Array of YouTube videos
- */
-export async function searchYouTubeVideos(query: string, limit = 5): Promise<YouTubeVideo[]> {
+// A service to search for YouTube videos
+export async function searchYouTube(query: string, limit = 10): Promise<YouTubeVideo[]> {
+  console.log(`[youtube-search-service] Searching for: "${query}", limit: ${limit}`)
+
+  // First try the official YouTube API
   try {
     // Import the package dynamically to avoid server-side issues
+    // @ts-ignore - Module lacks type definitions
     const youtubeSearchApi = await import("youtube-search-api")
 
     // Search for videos only (not playlists or channels)
@@ -24,17 +23,19 @@ export async function searchYouTubeVideos(query: string, limit = 5): Promise<You
       return []
     }
 
-    // Map the response to our YouTubeVideo type
-    return response.items
-      .filter((item) => item && item.type === "video" && item.id) // Ensure we only get videos
-      .map((item) => ({
-        id: item.id,
-        title: item.title,
-        thumbnail:
-          item.thumbnail && item.thumbnail.length > 0
-            ? item.thumbnail[0].url
-            : `https://i.ytimg.com/vi/${item.id}/mqdefault.jpg`,
-      }))
+    // Extract the video data
+    const videos = response.items
+      .filter((item: any) => item.type === "video")
+      .map((item: any) => {
+        return {
+          id: item.id,
+          title: item.title,
+          thumbnail: item.thumbnail.thumbnails[0].url,
+        }
+      })
+      .slice(0, limit)
+
+    return videos
   } catch (error) {
     console.error("Error searching YouTube videos:", error)
 
@@ -63,7 +64,7 @@ export async function findBestMatch(trackName: string, artistName: string): Prom
     // Try each query until we find results
     for (const query of searchQueries) {
       try {
-        const videos = await searchYouTubeVideos(query)
+        const videos = await searchYouTube(query)
 
         if (videos.length > 0) {
           // Check if any of the videos match the track and artist
@@ -126,6 +127,7 @@ function isGoodMatch(videoTitle: string, trackName: string, artistName: string):
 export async function getVideoDetails(videoId: string): Promise<YouTubeVideo | null> {
   try {
     // Import the package dynamically to avoid server-side issues
+    // @ts-ignore - Module lacks type definitions
     const youtubeSearchApi = await import("youtube-search-api")
 
     // Get video details
