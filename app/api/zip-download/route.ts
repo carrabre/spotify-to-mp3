@@ -86,6 +86,11 @@ function isMemoryApproachingLimit() {
   return memoryUsageMB > MAX_MEMORY_USAGE_MB
 }
 
+// Check if we're running on Vercel
+function isRunningOnVercel() {
+  return process.env.VERCEL_ENV !== undefined || process.env.VERCEL_REGION !== undefined;
+}
+
 export async function POST(request: NextRequest) {
   const requestId = Date.now().toString();
   const timer = startRequestTimer();
@@ -101,6 +106,18 @@ export async function POST(request: NextRequest) {
 
     if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
       return NextResponse.json({ error: "No tracks provided" }, { status: 400 })
+    }
+
+    // Check if we're running on Vercel - provide external download options if so
+    if (isRunningOnVercel()) {
+      console.log(`[ZIP-${requestId}] Running on Vercel, returning external download options`);
+      return NextResponse.json({ 
+        message: "External download options provided due to server limitations",
+        externalServices: true,
+        youtubeIds: tracks.map(track => track.youtubeId).filter(Boolean),
+        trackNames: tracks.map(track => track.name),
+        status: "external_services"
+      });
     }
 
     // Determine if we need to process in batches (for large playlists)

@@ -73,6 +73,11 @@ function startRequestTimer() {
   };
 }
 
+// Check if we're running on Vercel
+function isRunningOnVercel() {
+  return process.env.VERCEL_ENV !== undefined || process.env.VERCEL_REGION !== undefined;
+}
+
 export async function GET(request: NextRequest) {
   const requestId = Date.now().toString();
   const timer = startRequestTimer();
@@ -87,6 +92,12 @@ export async function GET(request: NextRequest) {
 
   if (!videoId) {
     return NextResponse.json({ error: "Video ID is required" }, { status: 400 })
+  }
+
+  // Check if we're running on Vercel and use fallback immediately if so
+  if (isRunningOnVercel()) {
+    console.log(`[${requestId}] Running on Vercel, using fallback download immediately`);
+    return fallbackDownload(videoId, title, artist, requestId);
   }
 
   // TypeScript doesn't recognize the above check as type narrowing in this context
