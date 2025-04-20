@@ -2,7 +2,23 @@
   "regions": ["iad1"],
   "functions": {
     "app/api/**/*": {
-      "memory": 1024,
+      "memory": 4096,
+      "maxDuration": 300
+    },
+    "app/api/transcode": {
+      "memory": 4096,
+      "maxDuration": 300
+    },
+    "app/api/mp3-download/**/*": {
+      "memory": 4096,
+      "maxDuration": 300
+    },
+    "app/api/zip-download/**/*": {
+      "memory": 4096,
+      "maxDuration": 300
+    },
+    "app/api/youtube/**/*": {
+      "memory": 3008,
       "maxDuration": 60
     }
   },
@@ -22,6 +38,15 @@
         {
           "key": "Cache-Control",
           "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/api/(transcode|mp3-download|zip-download)(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
         }
       ]
     }
