@@ -3,28 +3,23 @@
   "functions": {
     "app/api/**/*": {
       "memory": 3009,
-      "maxDuration": 800,
-      "runtime": "nodejs18.x"
+      "maxDuration": 800
     },
     "app/api/transcode": {
       "memory": 3009,
-      "maxDuration": 800,
-      "runtime": "nodejs18.x"
+      "maxDuration": 800
     },
     "app/api/mp3-download/**/*": {
       "memory": 3009,
-      "maxDuration": 800,
-      "runtime": "nodejs18.x"
+      "maxDuration": 800
     },
     "app/api/zip-download/**/*": {
       "memory": 3009,
-      "maxDuration": 800,
-      "runtime": "nodejs18.x"
+      "maxDuration": 800
     },
     "app/api/youtube/**/*": {
       "memory": 3009,
-      "maxDuration": 800,
-      "runtime": "nodejs18.x"
+      "maxDuration": 800
     }
   },
   "headers": [
