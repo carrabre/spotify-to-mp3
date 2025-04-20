@@ -375,7 +375,7 @@ export default function SpotifyConverter() {
     console.log(`[Client][${downloadId}] Set download state for track "${track.name}"`)
 
     try {
-      // Create the download URL using our new transcode endpoint which always returns MP3 data
+      // Create the download URL using our transcode endpoint
       const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
       console.log(`[Client][${downloadId}] Download URL created: ${downloadUrl}`)
 
@@ -395,67 +395,52 @@ export default function SpotifyConverter() {
 
             fetch(downloadUrl)
               .then(async response => {
-                const contentType = response.headers.get('content-type');
-                
-                if (contentType && contentType.includes('application/json')) {
-                  // If the response is JSON, it's an error response
-                  const errorData = await response.json();
-                  console.error(`[Client][${downloadId}] Download error:`, errorData);
-                  setDownloadErrors((prev) => ({
-                    ...prev,
-                    [track.id]: errorData.message || "Download failed. Please try alternative options.",
-                  }));
-                  
-                  // Show download modal with alternative options
-                  setCurrentTrack(track);
-                  setDownloadModalOpen(true);
-                  return;
-                } 
-                
                 if (!response.ok) {
-                  throw new Error(`Server returned status ${response.status}`);
+                  throw new Error(`Server returned status ${response.status}`)
                 }
                 
                 // For successful responses, convert to blob to handle binary data properly
-                const blob = await response.blob();
+                const blob = await response.blob()
                 
                 // Verify the blob is an audio file
                 if (!blob.type || !blob.type.includes('audio/')) {
-                  throw new Error("Received non-audio data");
+                  throw new Error("Received non-audio data")
                 }
                 
                 // Create a blob URL and trigger download
-                const blobUrl = URL.createObjectURL(blob);
-                const artistName = track.artist || (Array.isArray(track.artists) && track.artists[0]) || 'Unknown Artist';
-                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${artistName.replace(/[^a-z0-9]/gi, "_")}.mp3`;
+                const blobUrl = URL.createObjectURL(blob)
+                const artistName = track.artist || (Array.isArray(track.artists) && track.artists[0]) || 'Unknown Artist'
+                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${artistName.replace(/[^a-z0-9]/gi, "_")}.mp3`
                 
                 // Create a download link
-                const downloadLink = document.createElement('a');
-                downloadLink.href = blobUrl;
-                downloadLink.download = sanitizedFileName;
-                downloadLink.style.display = 'none';
-                document.body.appendChild(downloadLink);
+                const downloadLink = document.createElement('a')
+                downloadLink.href = blobUrl
+                downloadLink.download = sanitizedFileName
+                downloadLink.style.display = 'none'
+                document.body.appendChild(downloadLink)
                 
                 // Click the download link
-                console.log(`[Client][${downloadId}] Triggering download for ${sanitizedFileName}`);
-                downloadLink.click();
+                console.log(`[Client][${downloadId}] Triggering download for ${sanitizedFileName}`)
+                downloadLink.click()
                 
                 // Clean up
                 setTimeout(() => {
-                  document.body.removeChild(downloadLink);
-                  URL.revokeObjectURL(blobUrl);
-                }, 100);
+                  document.body.removeChild(downloadLink)
+                  URL.revokeObjectURL(blobUrl)
+                }, 100)
               })
               .catch(error => {
-                console.error(`[Client][${downloadId}] Download error:`, error);
+                console.error(`[Client][${downloadId}] Download error:`, error)
                 setDownloadErrors((prev) => ({
                   ...prev,
-                  [track.id]: error.message || "Error downloading file. Please try alternative options.",
-                }));
+                  [track.id]: error.message || "Error downloading file. Please try again.",
+                }))
                 
-                // Show download modal with alternative options
-                setCurrentTrack(track);
-                setDownloadModalOpen(true);
+                // Only show download modal if there's an actual error
+                if (error.message !== "User cancelled download") {
+                  setCurrentTrack(track)
+                  setDownloadModalOpen(true)
+                }
               })
               .finally(() => {
                 // Keep the completed state for a moment before clearing
@@ -464,7 +449,7 @@ export default function SpotifyConverter() {
                   setDownloadingTracks((prev) => ({ ...prev, [track.id]: false }))
                   resolve()
                 }, 2000)
-              });
+              })
           } else {
             // Update progress in smaller increments
             const roundedProgress = Math.min(Math.round(progress * 10) / 10, 99)
@@ -480,134 +465,29 @@ export default function SpotifyConverter() {
       }))
       setDownloadingTracks((prev) => ({ ...prev, [track.id]: false }))
       
-      // Open download modal with alternative options
-      setCurrentTrack(track)
-      setDownloadModalOpen(true)
+      // Show download modal with alternative options only if there's an actual error
+      if (error instanceof Error && error.message !== "User cancelled download") {
+        setCurrentTrack(track)
+        setDownloadModalOpen(true)
+      }
     }
   }
 
-  // Retry download with a different quality setting
   const handleRetryDownload = async (track: Track) => {
+    await handleDownloadTrack(track)
+  }
+
+  // Function to copy YouTube URL to clipboard
+  const handleCopyYouTubeUrl = (track: Track) => {
     if (!track.youtubeId) return
+    const url = `https://www.youtube.com/watch?v=${track.youtubeId}`
+    navigator.clipboard.writeText(url)
+  }
 
-    const downloadId = Date.now().toString()
-    console.log(`[Client][${downloadId}] Retrying download for track: "${track.name}"`)
-
-    // Clear any previous errors
-    setDownloadErrors((prev) => ({ ...prev, [track.id]: "" }))
-
-    // Set downloading state
-    setDownloadingTracks((prev) => ({ ...prev, [track.id]: true }))
-    setDownloadProgress((prev) => ({ ...prev, [track.id]: 0 })) // Start at 0%
-
-    try {
-      // Create the download URL with our new transcode endpoint
-      const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
-      console.log(`[Client][${downloadId}] Retry download URL created: ${downloadUrl}`)
-
-      // Simulate progress updates
-      let progress = 0
-      console.log(`[Client][${downloadId}] Starting progress simulation for retry "${track.name}"`)
-
-      const progressInterval = setInterval(() => {
-        // Increase progress in smaller increments (1.5-3.5% per update)
-        progress += Math.random() * 2 + 1.5
-
-        if (progress >= 100) {
-          progress = 100
-          clearInterval(progressInterval)
-          setDownloadProgress((prev) => ({ ...prev, [track.id]: 100 }))
-
-          // Use fetch with blob() method to properly handle binary data
-          fetch(downloadUrl)
-            .then(async response => {
-              const contentType = response.headers.get('content-type');
-              
-              if (contentType && contentType.includes('application/json')) {
-                // If the response is JSON, it's an error response
-                const errorData = await response.json();
-                console.error(`[Client][${downloadId}] Retry download error:`, errorData);
-                setDownloadErrors((prev) => ({
-                  ...prev,
-                  [track.id]: errorData.message || "Retry download failed. Please try alternative options.",
-                }));
-                
-                // Show download modal with alternative options
-                setCurrentTrack(track);
-                setDownloadModalOpen(true);
-                return;
-              } 
-              
-              if (!response.ok) {
-                throw new Error(`Server returned status ${response.status}`);
-              }
-              
-              // For successful responses, convert to blob to handle binary data properly
-              const blob = await response.blob();
-              
-              // Verify the blob is an audio file
-              if (!blob.type || !blob.type.includes('audio/')) {
-                throw new Error("Received non-audio data");
-              }
-              
-              // Create a blob URL and trigger download
-              const blobUrl = URL.createObjectURL(blob);
-              const artistName = track.artist || (Array.isArray(track.artists) && track.artists[0]) || 'Unknown Artist';
-              const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${artistName.replace(/[^a-z0-9]/gi, "_")}.mp3`;
-              
-              // Create a download link
-              const downloadLink = document.createElement('a');
-              downloadLink.href = blobUrl;
-              downloadLink.download = sanitizedFileName;
-              downloadLink.style.display = 'none';
-              document.body.appendChild(downloadLink);
-              
-              // Click the download link
-              console.log(`[Client][${downloadId}] Triggering retry download for ${sanitizedFileName}`);
-              downloadLink.click();
-              
-              // Clean up
-              setTimeout(() => {
-                document.body.removeChild(downloadLink);
-                URL.revokeObjectURL(blobUrl);
-              }, 100);
-            })
-            .catch(error => {
-              console.error(`[Client][${downloadId}] Retry download error:`, error);
-              setDownloadErrors((prev) => ({
-                ...prev,
-                [track.id]: error.message || "Error downloading file. Please try alternative options.",
-              }));
-              
-              // Show download modal with alternative options
-              setCurrentTrack(track);
-              setDownloadModalOpen(true);
-            })
-            .finally(() => {
-              // Keep the completed state for a moment before clearing
-              setTimeout(() => {
-                console.log(`[Client][${downloadId}] Clearing retry download state for track "${track.name}"`)
-                setDownloadingTracks((prev) => ({ ...prev, [track.id]: false }))
-              }, 2000)
-            });
-        } else {
-          // Update progress in smaller increments
-          const roundedProgress = Math.min(Math.round(progress * 10) / 10, 99)
-          setDownloadProgress((prev) => ({ ...prev, [track.id]: roundedProgress }))
-        }
-      }, 100) // Update more frequently for smoother progress
-    } catch (error) {
-      console.error(`[Client][${downloadId}] Error retrying download:`, error)
-      setDownloadErrors((prev) => ({
-        ...prev,
-        [track.id]: error instanceof Error ? error.message : "Retry failed. Please try a different method.",
-      }))
-      setDownloadingTracks((prev) => ({ ...prev, [track.id]: false }))
-      
-      // Open download modal with alternative options
-      setCurrentTrack(track)
-      setDownloadModalOpen(true)
-    }
+  // Function to open YouTube in new tab
+  const handleOpenYouTube = (track: Track) => {
+    if (!track.youtubeId) return
+    window.open(`https://www.youtube.com/watch?v=${track.youtubeId}`, '_blank')
   }
 
   // Function to add a log message
@@ -867,6 +747,7 @@ export default function SpotifyConverter() {
               onVerifyMatch={handleVerifyMatch}
               onDownload={handleDownloadTrack}
               onRetryDownload={handleRetryDownload}
+              onSearch={handleOpenSearchModal}
               downloadingTracks={downloadingTracks}
               downloadProgress={downloadProgress}
               downloadErrors={downloadErrors}
