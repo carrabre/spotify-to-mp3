@@ -53,9 +53,9 @@
   ],
   "build": {
     "env": {
-      "NEXT_PUBLIC_VERCEL_ENV": "production"
+      "NEXT_PUBLIC_VERCEL_ENV": "production",
+      "SKIP_PYTHON_CHECK": "true"
     }
   },
-  "installCommand": "apt-get update && apt-get install -y python3 && ln -sf /usr/bin/python3 /usr/bin/python",
-  "buildCommand": "npm install --legacy-peer-deps && npm run build"
+  "buildCommand": "npm install --legacy-peer-deps --ignore-scripts && npm run build"
 }
