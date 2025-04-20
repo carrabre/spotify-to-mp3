@@ -2,20 +2,20 @@
   "regions": ["iad1"],
   "functions": {
     "app/api/**/*": {
-      "memory": 4096,
-      "maxDuration": 300
+      "memory": 3008,
+      "maxDuration": 60
     },
     "app/api/transcode": {
       "memory": 4096,
-      "maxDuration": 300
+      "maxDuration": 60
     },
     "app/api/mp3-download/**/*": {
       "memory": 4096,
-      "maxDuration": 300
+      "maxDuration": 60
     },
     "app/api/zip-download/**/*": {
       "memory": 4096,
-      "maxDuration": 300
+      "maxDuration": 60
     },
     "app/api/youtube/**/*": {
       "memory": 3008,
