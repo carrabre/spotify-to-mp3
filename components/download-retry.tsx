@@ -11,9 +11,10 @@ interface DownloadRetryProps {
   trackName: string
   artistName: string
   onRetry: () => void
+  onError: (error: string) => void
 }
 
-export default function DownloadRetry({ videoId, trackName, artistName, onRetry }: DownloadRetryProps) {
+export default function DownloadRetry({ videoId, trackName, artistName, onRetry, onError }: DownloadRetryProps) {
   const [isRetrying, setIsRetrying] = useState(false)
   const [retryProgress, setRetryProgress] = useState(0)
   const [retryAttempt, setRetryAttempt] = useState(0)
@@ -24,8 +25,6 @@ export default function DownloadRetry({ videoId, trackName, artistName, onRetry 
     setRetryProgress(0)
     setError(null)
     setRetryAttempt((prev) => prev + 1)
-
-    console.log(`[DownloadRetry] Starting retry attempt ${retryAttempt + 1} for "${trackName}"`)
 
     try {
       // Simulate progress
@@ -38,13 +37,11 @@ export default function DownloadRetry({ videoId, trackName, artistName, onRetry 
 
       // Create the download URL with retry attempt in query params - use mp3-transcode endpoint
       const downloadUrl = `/api/mp3-transcode?videoId=${videoId}&title=${encodeURIComponent(trackName)}&artist=${encodeURIComponent(artistName)}&retry=${retryAttempt + 1}`
-      console.log(`[DownloadRetry] Retry download URL: ${downloadUrl}`)
 
       // Wait a moment to show progress
       await new Promise((resolve) => setTimeout(resolve, 1000))
 
       // Fetch the file
-      console.log(`[DownloadRetry] Fetching file for retry`)
       const response = await fetch(downloadUrl)
 
       if (!response.ok) {
@@ -53,7 +50,6 @@ export default function DownloadRetry({ videoId, trackName, artistName, onRetry 
 
       // Convert to blob
       const blob = await response.blob()
-      console.log(`[DownloadRetry] Blob size: ${blob.size} bytes`)
 
       // Verify the blob size
       if (blob.size < 100 * 1024) {
@@ -82,10 +78,12 @@ export default function DownloadRetry({ videoId, trackName, artistName, onRetry 
         setRetryProgress(0)
       }, 2000)
 
-      console.log(`[DownloadRetry] Retry successful for "${trackName}"`)
+      onRetry()
     } catch (error) {
       console.error(`[DownloadRetry] Retry failed:`, error)
-      setError(error instanceof Error ? error.message : String(error))
+      const errorMessage = error instanceof Error ? error.message : 'Download failed'
+      setError(errorMessage)
+      onError(errorMessage)
       setIsRetrying(false)
     }
   }
@@ -117,8 +115,8 @@ export default function DownloadRetry({ videoId, trackName, artistName, onRetry 
       ) : (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={handleRetry}>
-            <RefreshCw className="h-3 w-3 mr-2" />
-            Retry Download
+            <RefreshCw className={`h-3 w-3 mr-2 ${isRetrying ? "animate-spin" : ""}`} />
+            {isRetrying ? "Retrying..." : `Retry Download (Attempt ${retryAttempt + 1})`}
           </Button>
 
           <Button variant="outline" size="sm" onClick={handleAlternativeDownload}>

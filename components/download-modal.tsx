@@ -16,36 +16,36 @@ interface DownloadModalProps {
 export default function DownloadModal({ isOpen, onClose, track }: DownloadModalProps) {
   const [copied, setCopied] = useState(false)
 
-  if (!track) return null
+  if (!track || !track.youtubeId) return null
 
-  const youtubeUrl = track.youtubeId ? `https://www.youtube.com/watch?v=${track.youtubeId}` : null
-  const sanitizedFilename = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artist.replace(/[^a-z0-9]/gi, "_")}.mp3`
+  const youtubeUrl = `https://www.youtube.com/watch?v=${track.youtubeId}`
+  const artistString = track.artists?.join("_") || track.artist
+  const sanitizedFilename = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${artistString.replace(/[^a-z0-9]/gi, "_")}.mp3`
 
   const downloadServices = [
     {
       name: "Y2Mate",
-      url: track.youtubeId ? `https://www.y2mate.com/youtube-mp3/${track.youtubeId}` : "#",
+      url: `https://www.y2mate.com/youtube-mp3/${track.youtubeId}`,
       description: "Popular YouTube to MP3 converter with high quality options",
     },
     {
       name: "YTMP3.cc",
-      url: youtubeUrl ? `https://ytmp3.cc/youtube-to-mp3/?url=${encodeURIComponent(youtubeUrl)}` : "#",
+      url: `https://ytmp3.cc/youtube-to-mp3/?url=${encodeURIComponent(youtubeUrl)}`,
       description: "Fast converter with no ads",
     },
     {
       name: "OnlineVideoConverter",
-      url: youtubeUrl ? `https://www.onlinevideoconverter.com/youtube-converter?url=${encodeURIComponent(youtubeUrl)}` : "#",
+      url: `https://www.onlinevideoconverter.com/youtube-converter?url=${encodeURIComponent(youtubeUrl)}`,
       description: "Supports multiple formats and quality options",
     },
     {
       name: "SaveFrom.net",
-      url: youtubeUrl ? `https://en.savefrom.net/#url=${encodeURIComponent(youtubeUrl)}` : "#",
+      url: `https://en.savefrom.net/#url=${encodeURIComponent(youtubeUrl)}`,
       description: "Fast downloads with multiple quality options",
     },
   ]
 
   const handleCopyYouTubeUrl = () => {
-    if (!youtubeUrl) return
     navigator.clipboard.writeText(youtubeUrl).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
@@ -77,7 +77,6 @@ export default function DownloadModal({ isOpen, onClose, track }: DownloadModalP
                   variant="outline"
                   className="justify-start h-auto py-2"
                   onClick={() => window.open(service.url, "_blank")}
-                  disabled={!track.youtubeId}
                 >
                   <div className="flex flex-col items-start text-left">
                     <span className="flex items-center">
@@ -95,7 +94,7 @@ export default function DownloadModal({ isOpen, onClose, track }: DownloadModalP
             <h3 className="font-medium">Other Options:</h3>
 
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={handleCopyYouTubeUrl} disabled={!youtubeUrl}>
+              <Button variant="outline" onClick={handleCopyYouTubeUrl}>
                 {copied ? (
                   <>
                     <Check className="h-4 w-4 mr-2" />
@@ -109,7 +108,7 @@ export default function DownloadModal({ isOpen, onClose, track }: DownloadModalP
                 )}
               </Button>
 
-              <Button variant="outline" onClick={() => youtubeUrl && window.open(youtubeUrl, "_blank")} disabled={!youtubeUrl}>
+              <Button variant="outline" onClick={() => window.open(youtubeUrl, "_blank")}>
                 <Music className="h-4 w-4 mr-2" />
                 Open on YouTube
               </Button>

@@ -7,8 +7,24 @@ import path from 'path'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Get yt-dlp path from environment or use default
-const YT_DLP_PATH = process.env.YT_DLP_PATH || '/opt/homebrew/bin/yt-dlp'
+// Get yt-dlp path based on platform
+const getYtDlpPath = () => {
+  // Check environment variable first
+  if (process.env.YT_DLP_PATH) {
+    return process.env.YT_DLP_PATH
+  }
+
+  // Default paths based on platform
+  if (process.platform === 'win32') {
+    return 'yt-dlp.exe'
+  } else if (process.platform === 'darwin') {
+    return '/opt/homebrew/bin/yt-dlp'
+  } else {
+    return 'yt-dlp' // Linux and others
+  }
+}
+
+const YT_DLP_PATH = getYtDlpPath()
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -21,9 +37,15 @@ export async function GET(req: NextRequest) {
   const tempFile = path.join(os.tmpdir(), `${videoId}-${Date.now()}.mp3`)
 
   try {
-    // Check if yt-dlp exists
-    if (!fs.existsSync(YT_DLP_PATH)) {
-      throw new Error(`yt-dlp not found at path: ${YT_DLP_PATH}`)
+    // Check if yt-dlp exists and is executable
+    try {
+      const ytDlpVersion = spawn(YT_DLP_PATH, ['--version'])
+      await new Promise<void>((resolve, reject) => {
+        ytDlpVersion.on('error', reject)
+        ytDlpVersion.on('close', (code) => code === 0 ? resolve() : reject())
+      })
+    } catch (error) {
+      throw new Error(`yt-dlp not found or not executable at path: ${YT_DLP_PATH}`)
     }
 
     // Use yt-dlp to download and convert to mp3 directly

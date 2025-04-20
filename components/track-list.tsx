@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { ExternalLink, Music, Play, Download, Loader2, RefreshCw } from "lucide-react"
+import { ExternalLink, Music, Play, Download, Loader2, RefreshCw, Search } from "lucide-react"
 import type { Track } from "@/lib/types"
 import YouTubePreview from "@/components/youtube-preview"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { AlertCircle } from "lucide-react"
 export interface TrackListProps {
   tracks: Track[]
   onVerifyMatch: (track: Track) => Promise<void>
+  onSearch: (track: Track) => void
   onDownload: (track: Track) => Promise<void>
   onRetryDownload: (track: Track) => Promise<void>
   downloadingTracks: Record<string, boolean>
@@ -23,11 +24,15 @@ export interface TrackListProps {
 
 export default function TrackList({
   tracks,
+  onVerifyMatch,
+  onSearch,
   onDownload,
-  onRetry,
+  onRetryDownload,
   downloadingTracks,
   downloadProgress,
   downloadErrors,
+  matchingTrackIds,
+  verifyingTrack,
 }: TrackListProps) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
@@ -90,7 +95,7 @@ export default function TrackList({
                       )}
 
                       {!downloadingTracks[track.id] && downloadErrors[track.id] && (
-                        <Button variant="outline" size="sm" onClick={() => onRetry(track)} className="mt-2">
+                        <Button variant="outline" size="sm" onClick={() => onRetryDownload(track)} className="mt-2">
                           <RefreshCw className="mr-1 h-3 w-3" />
                           Retry
                         </Button>
@@ -102,10 +107,10 @@ export default function TrackList({
                 </td>
                 <td className="px-4 py-2 whitespace-nowrap">
                   <div className="flex items-center">
-                    {track.albumImageUrl ? (
+                    {track.youtubeThumbnail ? (
                       <Image
-                        src={track.albumImageUrl || "/placeholder.svg"}
-                        alt={track.album}
+                        src={track.youtubeThumbnail}
+                        alt={track.album || ""}
                         width={40}
                         height={40}
                         className="rounded-sm"
@@ -117,7 +122,9 @@ export default function TrackList({
                     )}
                     <div className="ml-3">
                       <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{track.name}</div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">{track.artists.join(", ")}</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        {track.artists ? track.artists.join(", ") : track.artist}
+                      </div>
                     </div>
                   </div>
                 </td>
@@ -159,7 +166,12 @@ export default function TrackList({
                       </div>
                     </div>
                   ) : (
-                    <span className="text-sm text-red-500">No match found</span>
+                    <div className="flex items-center">
+                      <Button variant="outline" size="sm" onClick={() => onSearch(track)}>
+                        <Search className="mr-2 h-4 w-4" />
+                        Search on YouTube
+                      </Button>
+                    </div>
                   )}
                 </td>
               </tr>
