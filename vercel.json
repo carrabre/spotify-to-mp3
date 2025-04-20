@@ -55,5 +55,6 @@
     "env": {
       "NEXT_PUBLIC_VERCEL_ENV": "production"
     }
-  }
+  },
+  "buildCommand": "npm ci --legacy-peer-deps && npm run build"
 }
