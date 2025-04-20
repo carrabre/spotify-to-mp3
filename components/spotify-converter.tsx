@@ -402,9 +402,10 @@ export default function SpotifyConverter() {
                 // For successful responses, convert to blob to handle binary data properly
                 const blob = await response.blob()
                 
-                // Verify the blob is an audio file
-                if (!blob.type || !blob.type.includes('audio/')) {
-                  throw new Error("Received non-audio data")
+                // Verify the blob is an audio file and has content
+                if (!blob.type || !blob.type.includes('audio/') || blob.size < 10000) {
+                  console.error(`[Client][${downloadId}] Invalid audio data: type=${blob.type}, size=${blob.size}`)
+                  throw new Error("Received invalid audio data")
                 }
                 
                 // Create a blob URL and trigger download
@@ -431,16 +432,55 @@ export default function SpotifyConverter() {
               })
               .catch(error => {
                 console.error(`[Client][${downloadId}] Download error:`, error)
-                setDownloadErrors((prev) => ({
-                  ...prev,
-                  [track.id]: error.message || "Error downloading file. Please try again.",
-                }))
                 
-                // Only show download modal if there's an actual error
-                if (error.message !== "User cancelled download") {
-                  setCurrentTrack(track)
-                  setDownloadModalOpen(true)
-                }
+                // Now try alternative download method through mp3-transcode endpoint
+                console.log(`[Client][${downloadId}] Trying fallback download endpoint for "${track.name}"`)
+                
+                const fallbackUrl = `/api/mp3-transcode?videoId=${track.youtubeId}&title=${encodeURIComponent(track.name)}&artist=${encodeURIComponent(track.artist || '')}`
+                
+                return fetch(fallbackUrl)
+                  .then(async fallbackResponse => {
+                    if (!fallbackResponse.ok) {
+                      throw new Error(`Fallback server returned status ${fallbackResponse.status}`)
+                    }
+                    
+                    const fallbackBlob = await fallbackResponse.blob()
+                    
+                    // Verify the fallback blob data
+                    if (!fallbackBlob.type || !fallbackBlob.type.includes('audio/') || fallbackBlob.size < 10000) {
+                      console.error(`[Client][${downloadId}] Invalid fallback audio data: type=${fallbackBlob.type}, size=${fallbackBlob.size}`)
+                      throw new Error("Received invalid audio data from fallback")
+                    }
+                    
+                    const fallbackBlobUrl = URL.createObjectURL(fallbackBlob)
+                    const artistName = track.artist || (Array.isArray(track.artists) && track.artists[0]) || 'Unknown Artist'
+                    const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${artistName.replace(/[^a-z0-9]/gi, "_")}.mp3`
+                    
+                    const fallbackDownloadLink = document.createElement('a')
+                    fallbackDownloadLink.href = fallbackBlobUrl
+                    fallbackDownloadLink.download = sanitizedFileName
+                    fallbackDownloadLink.style.display = 'none'
+                    document.body.appendChild(fallbackDownloadLink)
+                    
+                    console.log(`[Client][${downloadId}] Triggering fallback download for ${sanitizedFileName}`)
+                    fallbackDownloadLink.click()
+                    
+                    setTimeout(() => {
+                      document.body.removeChild(fallbackDownloadLink)
+                      URL.revokeObjectURL(fallbackBlobUrl)
+                    }, 100)
+                  })
+                  .catch(fallbackError => {
+                    console.error(`[Client][${downloadId}] Fallback download also failed:`, fallbackError)
+                    setDownloadErrors((prev) => ({
+                      ...prev,
+                      [track.id]: fallbackError.message || "Error downloading file. Please try external services.",
+                    }))
+                    
+                    // Show download modal with alternative options after both methods fail
+                    setCurrentTrack(track)
+                    setDownloadModalOpen(true)
+                  })
               })
               .finally(() => {
                 // Keep the completed state for a moment before clearing
@@ -465,11 +505,9 @@ export default function SpotifyConverter() {
       }))
       setDownloadingTracks((prev) => ({ ...prev, [track.id]: false }))
       
-      // Show download modal with alternative options only if there's an actual error
-      if (error instanceof Error && error.message !== "User cancelled download") {
-        setCurrentTrack(track)
-        setDownloadModalOpen(true)
-      }
+      // Show download modal with alternative options
+      setCurrentTrack(track)
+      setDownloadModalOpen(true)
     }
   }
 
@@ -765,11 +803,14 @@ export default function SpotifyConverter() {
         onSelect={handleSelectVideo}
       />
 
-      <DownloadModal
-        isOpen={downloadModalOpen}
-        onClose={() => setDownloadModalOpen(false)}
-        track={currentTrack}
-      />
+      {downloadModalOpen && (
+        <DownloadModal
+          isOpen={downloadModalOpen}
+          onClose={() => setDownloadModalOpen(false)}
+          track={currentTrack}
+          onRetry={handleRetryDownload}
+        />
+      )}
     </div>
   )
 }

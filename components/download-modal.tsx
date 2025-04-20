@@ -4,17 +4,19 @@ import { useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Download, Music, Copy, Check } from "lucide-react"
+import { Download, Music, Copy, Check, ExternalLink, RefreshCw } from "lucide-react"
 import type { Track } from "@/lib/types"
 
 interface DownloadModalProps {
   isOpen: boolean
   onClose: () => void
   track: Track | null
+  onRetry?: (track: Track) => Promise<void>
 }
 
-export default function DownloadModal({ isOpen, onClose, track }: DownloadModalProps) {
+export default function DownloadModal({ isOpen, onClose, track, onRetry }: DownloadModalProps) {
   const [copied, setCopied] = useState(false)
+  const [isRetrying, setIsRetrying] = useState(false)
 
   if (!track || !track.youtubeId) return null
 
@@ -52,6 +54,21 @@ export default function DownloadModal({ isOpen, onClose, track }: DownloadModalP
     })
   }
 
+  const handleRetry = async () => {
+    if (!track || !onRetry) return
+    
+    setIsRetrying(true)
+    try {
+      await onRetry(track)
+      // Close modal if retry is successful (the download will start)
+      onClose()
+    } catch (error) {
+      console.error("Retry failed:", error)
+    } finally {
+      setIsRetrying(false)
+    }
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[500px]">
@@ -62,13 +79,24 @@ export default function DownloadModal({ isOpen, onClose, track }: DownloadModalP
         <div className="mt-4 space-y-4">
           <Alert>
             <AlertDescription>
-              Due to server limitations, we recommend using one of these reliable external services to download your
-              MP3.
+              The direct download failed due to server limitations. You can try again or use one of these reliable external services.
             </AlertDescription>
           </Alert>
 
+          {onRetry && (
+            <Button 
+              variant="default" 
+              className="w-full"
+              onClick={handleRetry}
+              disabled={isRetrying}
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${isRetrying ? "animate-spin" : ""}`} />
+              {isRetrying ? "Retrying..." : "Try Direct Download Again"}
+            </Button>
+          )}
+
           <div className="space-y-2">
-            <h3 className="font-medium">Download Options:</h3>
+            <h3 className="font-medium">External Download Options:</h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {downloadServices.map((service) => (

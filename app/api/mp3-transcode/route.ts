@@ -1,11 +1,29 @@
 // app/api/mp3-transcode/route.ts
 import { type NextRequest, NextResponse } from "next/server"
+// @ts-ignore - s-ytdl doesn't have type definitions
 import SYTDL from "s-ytdl"
+import fetch from "node-fetch"
 import ffmpegStatic from "ffmpeg-static"
-import { execFile } from "child_process"
+import { execFile, spawn } from "child_process"
 import fs from "fs"
 import os from "os"
 import path from "path"
+
+// Add type declaration for external APIs
+interface ApiResponse {
+  success: boolean;
+  data?: {
+    url: string;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+interface AlternativeApiResponse {
+  status: string;
+  link?: string;
+  [key: string]: any;
+}
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -37,12 +55,13 @@ export async function GET(req: NextRequest) {
 
     const outFile = path.join(tempDir, `${requestId}_${sanitizedFilename}`)
 
-    // 1) Download audio using s-ytdl
-    console.log(`[mp3-transcode][${requestId}] Downloading audio with s-ytdl`)
-    let audioBuffer: Buffer
-
+    // Try different download methods in sequence
+    // Method 1: Using s-ytdl (lightweight YouTube downloader)
     try {
-      audioBuffer = await SYTDL.dl(`https://www.youtube.com/watch?v=${videoId}`, "4", "audio")
+      console.log(`[mp3-transcode][${requestId}] Trying Method 1: s-ytdl`)
+      
+      // 1) Download audio using s-ytdl
+      const audioBuffer = await SYTDL.dl(`https://www.youtube.com/watch?v=${videoId}`, "4", "audio")
       console.log(`[mp3-transcode][${requestId}] Download complete, buffer size: ${audioBuffer.length} bytes`)
 
       // Write to temp file
@@ -52,6 +71,7 @@ export async function GET(req: NextRequest) {
 
       // 2) Transcode to MP3 with FFmpeg
       console.log(`[mp3-transcode][${requestId}] Starting FFmpeg transcoding`)
+      
       await new Promise<void>((resolve, reject) => {
         execFile(
           ffmpegStatic!,
@@ -127,25 +147,109 @@ export async function GET(req: NextRequest) {
         status: 200,
         headers,
       })
-    } catch (downloadError) {
-      console.error(`[mp3-transcode][${requestId}] Error in s-ytdl or FFmpeg:`, downloadError)
-
-      // Instead of redirecting to Y2Mate (which returns HTML instead of MP3),
-      // return a proper error response that the client can handle
-      return NextResponse.json({
-        error: "Download failed",
-        message: "The direct download method failed. Please try alternative download options.",
-        details: downloadError instanceof Error ? downloadError.message : String(downloadError),
-      }, { status: 500 })
+    } catch (method1Error) {
+      console.error(`[mp3-transcode][${requestId}] Method 1 failed:`, method1Error)
+      
+      // Method 2: Try using a public API service (free tier of a YouTube to MP3 API)
+      try {
+        console.log(`[mp3-transcode][${requestId}] Trying Method 2: External API service`)
+        
+        // Use a reliable public API that returns direct MP3 data
+        // This is more reliable for the deployed environment
+        const apiUrl = `https://converter-api-nine.vercel.app/api/convert?url=https://www.youtube.com/watch?v=${videoId}`
+        
+        const apiResponse = await fetch(apiUrl)
+        
+        if (!apiResponse.ok) {
+          throw new Error(`API responded with status ${apiResponse.status}`)
+        }
+        
+        const apiResult = await apiResponse.json() as ApiResponse
+        
+        if (!apiResult.success || !apiResult.data || !apiResult.data.url) {
+          throw new Error('API returned invalid response format')
+        }
+        
+        // Download from the provided URL
+        const mp3Response = await fetch(apiResult.data.url)
+        
+        if (!mp3Response.ok) {
+          throw new Error(`MP3 download failed with status ${mp3Response.status}`)
+        }
+        
+        // Get the audio data
+        const mp3Buffer = await mp3Response.buffer()
+        
+        if (mp3Buffer.length < 10000) {
+          throw new Error('Downloaded file is suspiciously small')
+        }
+        
+        console.log(`[mp3-transcode][${requestId}] External API method successful, file size: ${mp3Buffer.length} bytes`)
+        
+        // Return the MP3 data
+        const headers = new Headers()
+        headers.set("Content-Type", "audio/mpeg")
+        headers.set("Content-Disposition", `attachment; filename="${sanitizedFilename}"`)
+        headers.set("Content-Length", mp3Buffer.length.toString())
+        headers.set("Cache-Control", "no-store, no-cache")
+        
+        return new NextResponse(mp3Buffer, {
+          status: 200,
+          headers,
+        })
+      } catch (method2Error) {
+        console.error(`[mp3-transcode][${requestId}] Method 2 failed:`, method2Error)
+        
+        // Method 3: Try using a different API service
+        try {
+          console.log(`[mp3-transcode][${requestId}] Trying Method 3: Alternative API service`)
+          
+          // Use another reliable API (different provider)
+          const alternativeApiUrl = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`
+          
+          const alternativeApiResponse = await fetch(alternativeApiUrl, {
+            headers: {
+              'X-RapidAPI-Key': process.env.RAPID_API_KEY || '',
+              'X-RapidAPI-Host': 'youtube-mp36.p.rapidapi.com'
+            }
+          })
+          
+          if (!alternativeApiResponse.ok) {
+            throw new Error(`Alternative API responded with status ${alternativeApiResponse.status}`)
+          }
+          
+          const alternativeApiResult = await alternativeApiResponse.json() as AlternativeApiResponse
+          
+          if (alternativeApiResult.status === 'ok' && alternativeApiResult.link) {
+            // Redirect to the download URL - client will handle this
+            return NextResponse.redirect(alternativeApiResult.link)
+          } else {
+            throw new Error('Alternative API returned invalid response')
+          }
+        } catch (method3Error) {
+          console.error(`[mp3-transcode][${requestId}] Method 3 failed:`, method3Error)
+          
+          // All methods failed, return comprehensive error information
+          return NextResponse.json({
+            error: "All download methods failed",
+            message: "The server was unable to download this track. Please use the external download options.",
+            details: {
+              method1Error: method1Error instanceof Error ? method1Error.message : String(method1Error),
+              method2Error: method2Error instanceof Error ? method2Error.message : String(method2Error),
+              method3Error: method3Error instanceof Error ? method3Error.message : String(method3Error)
+            }
+          }, { status: 500 })
+        }
+      }
     }
-  } catch (error) {
-    console.error(`[mp3-transcode][${requestId}] Error:`, error)
+  } catch (generalError) {
+    console.error(`[mp3-transcode][${requestId}] General error:`, generalError)
 
-    // Return an error response instead of redirecting to Y2Mate
+    // Return an error response with comprehensive details
     return NextResponse.json({
       error: "Download failed",
       message: "The download process encountered an error. Please try alternative download options.",
-      details: error instanceof Error ? error.message : String(error),
+      details: generalError instanceof Error ? generalError.message : String(generalError),
     }, { status: 500 })
   }
 }
