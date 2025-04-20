@@ -167,7 +167,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       { 
         success: false, 
-        message: error instanceof Error ? error.message : 'Unknown error occurred',
+        message: error instanceof Error ? 
+          (error.message.includes('403') || error.message.includes('forbidden') 
+            ? 'YouTube is blocking this download. Please try again or use the alternative download options.' 
+            : error.message) 
+          : 'Unknown error occurred',
         timestamp: new Date().toISOString(),
         errorType: error instanceof Error ? error.name : 'Unknown'
       },

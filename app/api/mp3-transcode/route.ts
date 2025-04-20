@@ -174,7 +174,11 @@ export async function GET(req: NextRequest) {
     // Return an error response with explicit content type
     return NextResponse.json({
       error: "Download failed",
-      message: error instanceof Error ? error.message : "The download process encountered an error. Please try alternative download options.",
+      message: error instanceof Error ? 
+        (error.message.includes('403') || error.message.includes('forbidden') 
+          ? 'YouTube is blocking this download. Please try again or use the alternative download options.' 
+          : error.message) 
+        : "The download process encountered an error. Please try alternative download options.",
       details: error instanceof Error ? error.message : String(error),
       timestamp: new Date().toISOString()
     }, { 
