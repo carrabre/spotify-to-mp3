@@ -779,14 +779,6 @@ export default function SpotifyConverter() {
               )}
               {!autoMatchingInProgress && (
                 <>
-                  <Button variant="outline" onClick={testSYtdl} className="mr-2">
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Test API
-                  </Button>
-                  <Button variant="outline" onClick={runDiagnosticTest}>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Run Diagnostics
-                  </Button>
                 </>
               )}
               <Button variant="outline" onClick={handleExportExcel}>
@@ -805,17 +797,6 @@ export default function SpotifyConverter() {
               downloadProgress={downloadProgress}
               downloadErrors={downloadErrors}
             />
-
-            <div className="mb-4 text-sm text-gray-600 dark:text-gray-400 p-3 bg-gray-100 dark:bg-gray-700 rounded-md">
-              <p>
-                <strong>Note:</strong> Downloads will open in a new tab. If you encounter any issues, try the retry
-                options.
-              </p>
-              <p className="mt-1">
-                <strong>Tip:</strong> Using quality "4" (192 kbps) provides the best audio quality. If downloads fail,
-                try quality "3" (128 kbps) which is more reliable.
-              </p>
-            </div>
           </div>
         </div>
       )}

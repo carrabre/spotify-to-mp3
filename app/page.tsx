@@ -8,8 +8,7 @@ export default function Home() {
         <header className="text-center mb-12">
           <h1 className="text-4xl font-bold text-green-600 dark:text-green-400 mb-4">Spotify to MP3 Converter</h1>
           <p className="text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-            Convert your favorite Spotify playlists and tracks to MP3 files. Simply paste a Spotify link, and we'll find
-            the corresponding YouTube videos and prepare them for download.
+            Convert your favorite Spotify playlists and tracks to MP3 files.
           </p>
         </header>
 
