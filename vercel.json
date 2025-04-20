@@ -57,6 +57,5 @@
       "SKIP_PYTHON_CHECK": "true",
       "NODE_OPTIONS": "--max-old-space-size=4096"
     }
-  },
-  "buildCommand": "npm install --legacy-peer-deps && npm install tailwindcss postcss autoprefixer && npm run build"
+  }
 }

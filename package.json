@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "mkdir -p .vercel/bin && echo '#!/bin/sh' > .vercel/bin/python && chmod +x .vercel/bin/python && echo '#!/bin/sh' > .vercel/bin/yt-dlp && chmod +x .vercel/bin/yt-dlp",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
