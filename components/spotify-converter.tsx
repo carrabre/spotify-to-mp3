@@ -375,8 +375,8 @@ export default function SpotifyConverter() {
   const handleDownloadTrack = async (track: Track) => {
     if (!track.youtubeId) return
 
-    const downloadId = Date.now().toString() // Unique ID for this download
-    console.log(`[Client][${downloadId}] Starting download for track: "${track.name}" (ID: ${track.id})`)
+    const downloadId = Date.now().toString()
+    console.log(`[Client][${downloadId}] Starting download for track: "${track.name}"`)
 
     // Clear any previous errors for this track
     setDownloadErrors((prev) => ({ ...prev, [track.id]: "" }))
@@ -409,12 +409,40 @@ export default function SpotifyConverter() {
             setDownloadProgress((prev) => ({ ...prev, [track.id]: 100 }))
 
             // Use fetch with blob() method to properly handle binary data
+            console.log(`[Client][${downloadId}] Initiating fetch request to ${downloadUrl}`)
             fetch(downloadUrl)
-              .then((response): Promise<Blob | undefined> => {
-                const contentType = response.headers.get('content-type');
+              .then((response) => {
+                // Log response details for debugging
+                const contentType = response.headers.get('content-type') || 'unknown';
+                const contentLength = response.headers.get('content-length') || 'unknown';
+                const contentDisposition = response.headers.get('content-disposition') || 'unknown';
                 
-                if (contentType && contentType.includes('application/json')) {
-                  // If the response is JSON, it's an error response
+                console.log(`[Client][${downloadId}] Response received:`, {
+                  status: response.status,
+                  statusText: response.statusText,
+                  contentType,
+                  contentLength,
+                  contentDisposition,
+                  ok: response.ok
+                });
+                
+                // Check if the response is HTML (which could happen with error pages)
+                if (contentType.includes('text/html')) {
+                  console.error(`[Client][${downloadId}] Error: Received HTML response instead of audio`);
+                  
+                  // We'll need to show the error modal with alternatives
+                  setDownloadErrors((prev) => ({
+                    ...prev,
+                    [track.id]: "Received HTML instead of audio. Please try alternative options.",
+                  }));
+                  
+                  setCurrentTrack(track);
+                  setDownloadModalOpen(true);
+                  return undefined;
+                }
+                
+                // If it's JSON, it's an error response
+                if (contentType.includes('application/json')) {
                   console.log(`[Client][${downloadId}] Server returned JSON (error). Content-Type: ${contentType}`);
                   
                   // Get the actual error response
@@ -433,21 +461,48 @@ export default function SpotifyConverter() {
                 } 
                 
                 if (!response.ok) {
-                  throw new Error(`Server returned status ${response.status}`);
+                  throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
                 }
                 
                 // For successful responses, convert to blob to handle binary data properly
                 return response.blob();
               })
               .then(blob => {
-                if (!blob) return; // Skip if blob is undefined (happens when handling JSON error)
+                if (!blob) return; // Skip if blob is undefined (happens when handling error responses)
+                
+                // Log blob details
+                console.log(`[Client][${downloadId}] Blob received:`, {
+                  type: blob.type || 'no-type',
+                  size: blob.size,
+                  timestamp: new Date().toISOString()
+                });
+                
+                // Verify the blob has some content
+                if (blob.size < 1000) {
+                  console.error(`[Client][${downloadId}] Warning: Very small file (${blob.size} bytes)`);
+                  
+                  if (blob.size < 100) {
+                    setDownloadErrors((prev) => ({
+                      ...prev,
+                      [track.id]: "Received unusually small file. Please try alternative options.",
+                    }));
+                    
+                    setCurrentTrack(track);
+                    setDownloadModalOpen(true);
+                    return;
+                  }
+                }
+                
+                // Support various audio types, not just MP3
+                const acceptedTypes = ['audio/mpeg', 'audio/mp3', 'audio/webm', 'audio/ogg', 'audio/wav', 'audio/'];
+                const isAudioType = acceptedTypes.some(type => blob.type.includes(type));
                 
                 // Verify the blob is an audio file
-                if (!blob.type || !blob.type.includes('audio/')) {
+                if (blob.type && !isAudioType) {
                   console.error(`[Client][${downloadId}] Received non-audio blob: ${blob.type}`);
                   setDownloadErrors((prev) => ({
                     ...prev,
-                    [track.id]: "Received non-audio data. Please try alternative options.",
+                    [track.id]: `Received non-audio data (${blob.type}). Please try alternative options.`,
                   }));
                   
                   // Show download modal with alternative options
