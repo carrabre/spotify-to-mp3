@@ -47,6 +47,13 @@ export default function SpotifyConverter() {
   const [zipProgress, setZipProgress] = useState(0)
   const downloadLinkRef = useRef<HTMLAnchorElement | null>(null)
 
+  // Add new state variables for batch downloading
+  const [batchDownloadInProgress, setBatchDownloadInProgress] = useState(false)
+  const [batchDownloadProgress, setBatchDownloadProgress] = useState(0)
+  const [currentBatchTrackIndex, setCurrentBatchTrackIndex] = useState(0)
+  const [batchTotalTracks, setBatchTotalTracks] = useState(0)
+  const [downloadedFiles, setDownloadedFiles] = useState<{name: string, blob: Blob}[]>([])
+
   // Auto-match tracks when they're loaded
   useEffect(() => {
     if (tracks.length > 0 && !autoMatchingInProgress) {
@@ -660,6 +667,154 @@ export default function SpotifyConverter() {
     setZipModalOpen(true)
   }
 
+  // New function to handle downloading all tracks sequentially
+  const handleDownloadAllTracks = async () => {
+    const verifiedTracks = tracks.filter(track => track.youtubeId && track.verified)
+    if (verifiedTracks.length === 0) return
+    
+    // Initialize batch download states
+    setBatchDownloadInProgress(true)
+    setBatchDownloadProgress(0)
+    setCurrentBatchTrackIndex(0)
+    setBatchTotalTracks(verifiedTracks.length)
+    setDownloadedFiles([])
+    
+    // Create an array to store downloaded file blobs
+    const fileBlobs: {name: string, blob: Blob}[] = []
+    
+    // Download tracks one by one
+    for (let i = 0; i < verifiedTracks.length; i++) {
+      const track = verifiedTracks[i]
+      setCurrentBatchTrackIndex(i)
+      
+      // Update batch progress
+      setBatchDownloadProgress(Math.round((i / verifiedTracks.length) * 100))
+      
+      // Skip if no YouTube ID
+      if (!track.youtubeId) continue
+      
+      // Set this track as downloading
+      setDownloadingTracks(prev => ({ ...prev, [track.id]: true }))
+      setDownloadProgress(prev => ({ ...prev, [track.id]: 0 }))
+      
+      try {
+        // Create the download URL
+        const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
+        console.log(`[Batch][${i+1}/${verifiedTracks.length}] Downloading "${track.name}"`)
+        
+        // Download the track
+        let audioBlob: Blob | null = null
+        let errorMessage: string | null = null
+        
+        try {
+          const response = await fetch(downloadUrl)
+          
+          // Check if response is JSON (error)
+          const contentType = response.headers.get('content-type')
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await response.json()
+            errorMessage = errorData.message || "Download failed"
+          } else if (!response.ok) {
+            errorMessage = `Server returned status ${response.status}`
+          } else {
+            // Get the audio blob
+            audioBlob = await response.blob()
+            
+            // Verify it's an audio file
+            if (!audioBlob.type || !audioBlob.type.includes('audio/')) {
+              errorMessage = "Received non-audio data"
+            }
+          }
+        } catch (fetchError) {
+          errorMessage = fetchError instanceof Error ? fetchError.message : "Network error"
+        }
+        
+        // Handle errors or process the blob
+        if (errorMessage) {
+          console.error(`[Batch] Error for "${track.name}": ${errorMessage}`)
+          setDownloadErrors(prev => ({
+            ...prev,
+            [track.id]: errorMessage
+          }))
+          continue // Skip this track and move to next
+        }
+        
+        if (!audioBlob) {
+          console.error(`[Batch] No audio blob for "${track.name}"`)
+          continue // Skip this track if we somehow don't have a blob
+        }
+        
+        // Create filename
+        const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`
+        
+        // Store the blob for later ZIP creation
+        fileBlobs.push({ name: sanitizedFileName, blob: audioBlob })
+        setDownloadedFiles(prev => [...prev, { name: sanitizedFileName, blob: audioBlob }])
+        
+        // Mark this track as complete
+        setDownloadProgress(prev => ({ ...prev, [track.id]: 100 }))
+        
+        // Small delay before processing next track
+        await new Promise(resolve => setTimeout(resolve, 500))
+      } catch (error) {
+        console.error(`[Batch] Error processing "${track.name}":`, error)
+        setDownloadErrors(prev => ({
+          ...prev,
+          [track.id]: error instanceof Error ? error.message : "Processing failed"
+        }))
+      } finally {
+        // Clear downloading state for this track
+        setDownloadingTracks(prev => ({ ...prev, [track.id]: false }))
+      }
+    }
+    
+    // Create and download ZIP after all tracks are processed
+    setBatchDownloadProgress(100)
+    
+    if (fileBlobs.length > 0) {
+      try {
+        const JSZip = (await import('jszip')).default
+        const zip = new JSZip()
+        
+        // Add all files to the ZIP
+        fileBlobs.forEach(file => {
+          zip.file(file.name, file.blob)
+        })
+        
+        // Generate the ZIP file
+        const zipBlob = await zip.generateAsync({ type: 'blob' })
+        
+        // Create download link for the ZIP
+        const zipUrl = URL.createObjectURL(zipBlob)
+        const downloadLink = document.createElement('a')
+        downloadLink.href = zipUrl
+        downloadLink.download = "spotify_tracks.zip"
+        downloadLink.style.display = 'none'
+        document.body.appendChild(downloadLink)
+        
+        // Click the download link
+        downloadLink.click()
+        
+        // Clean up
+        setTimeout(() => {
+          document.body.removeChild(downloadLink)
+          URL.revokeObjectURL(zipUrl)
+        }, 100)
+        
+        console.log(`[Batch] ZIP file created with ${fileBlobs.length} tracks`)
+      } catch (error) {
+        console.error(`[Batch] Error creating ZIP file:`, error)
+        setError(`Error creating ZIP file: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    
+    // Reset batch download state
+    setTimeout(() => {
+      setBatchDownloadInProgress(false)
+      setWarning(`Downloaded ${fileBlobs.length} out of ${verifiedTracks.length} tracks`)
+    }, 2000)
+  }
+
   // Test the s-ytdl library
   const testSYtdl = async () => {
     console.log(`[Client] Testing download functionality`)
@@ -677,8 +832,7 @@ export default function SpotifyConverter() {
 
       if (data.success) {
         console.log(`[Client] Download test successful:`, data)
-        setWarning(`Download test successful! The API endpoint is working correctly  data)
-        setWarning(\`Download test successful! The API endpoint is working correctly.`)
+        setWarning(`Download test successful! The API endpoint is working correctly.`)
       } else {
         console.error(`[Client] Download test failed:`, data)
         setError(`Download test failed: ${data.error || "Unknown error"}`)
@@ -756,6 +910,16 @@ export default function SpotifyConverter() {
         </div>
       )}
 
+      {batchDownloadInProgress && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
+          <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">
+            <span>Downloading tracks ({currentBatchTrackIndex + 1}/{batchTotalTracks}): {downloadedFiles.length} complete</span>
+            <span>{batchDownloadProgress}%</span>
+          </div>
+          <Progress value={batchDownloadProgress} className="h-2" />
+        </div>
+      )}
+
       {tracks.length > 0 && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
@@ -764,9 +928,14 @@ export default function SpotifyConverter() {
                 {tracks.length} {tracks.length === 1 ? "Track" : "Tracks"} Found
               </h2>
               {verifiedTracksCount > 0 && (
-                <Button variant="default" className="bg-green-600 hover:bg-green-700" onClick={handleOpenZipModal}>
+                <Button 
+                  variant="default" 
+                  className="bg-green-600 hover:bg-green-700" 
+                  onClick={handleDownloadAllTracks}
+                  disabled={batchDownloadInProgress}
+                >
                   <Package className="mr-2 h-4 w-4" />
-                  Download All ({verifiedTracksCount})
+                  {batchDownloadInProgress ? 'Downloading...' : `Download All (${verifiedTracksCount})`}
                 </Button>
               )}
             </div>

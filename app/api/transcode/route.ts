@@ -3,140 +3,88 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { getServerRuntimeConfig } from '@/lib/config'
+import { throttle } from '@/lib/utils'
 
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
+// Track ongoing requests to prevent overloading the server
+let ongoingRequests = 0
+const MAX_CONCURRENT = 5 // Maximum concurrent transcoding operations
 
 // Get yt-dlp path from environment or use default
 const YT_DLP_PATH = process.env.YT_DLP_PATH || '/opt/homebrew/bin/yt-dlp'
 
+// Configure cache for responses
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+// Handle transcoding requests with optimized resource usage
 export async function GET(req: NextRequest) {
-  const startTime = Date.now()
-  const videoId = req.nextUrl.searchParams.get('videoId')
-  if (!videoId) {
-    return NextResponse.json({ error: 'Missing videoId' }, { status: 400 })
-  }
-
-  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`
-  const tempFile = path.join(os.tmpdir(), `${videoId}-${Date.now()}.mp3`)
-
-  console.log(`[Transcode][${videoId}] Starting transcode process at ${new Date().toISOString()}`)
-  console.log(`[Transcode][${videoId}] System info:`, {
-    platform: process.platform,
-    arch: process.arch,
-    nodeVersion: process.version,
-    tempDir: os.tmpdir(),
-    freeMem: os.freemem(),
-    totalMem: os.totalmem(),
-    ytDlpPath: YT_DLP_PATH,
-    ytDlpExists: fs.existsSync(YT_DLP_PATH)
-  })
-  console.log(`[Transcode][${videoId}] videoUrl: ${videoUrl}`)
-  console.log(`[Transcode][${videoId}] tempFile: ${tempFile}`)
-
   try {
-    console.log(`[Transcode][${videoId}] Starting yt-dlp download...`)
+    const { searchParams } = new URL(req.url)
+    const videoId = searchParams.get('videoId')
+
+    if (!videoId) {
+      return NextResponse.json(
+        { success: false, message: "Missing 'videoId' parameter" },
+        { status: 400 }
+      )
+    }
+
+    // Check if we're at capacity
+    if (ongoingRequests >= MAX_CONCURRENT) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: "Server is at capacity. Please try again later."
+        },
+        { 
+          status: 503,
+          headers: {
+            'Retry-After': '10'
+          }
+        }
+      )
+    }
+
+    // Increment counter
+    ongoingRequests++
     
-    // Check if yt-dlp exists
-    if (!fs.existsSync(YT_DLP_PATH)) {
-      throw new Error(`yt-dlp not found at path: ${YT_DLP_PATH}`)
-    }
-
-    // Use yt-dlp to download and convert to mp3 directly
-    const ytDlpProcess = spawn(YT_DLP_PATH, [
-      videoUrl,
-      '--extract-audio',
-      '--audio-format', 'mp3',
-      '--audio-quality', '0',
-      '--output', tempFile,
-      '--no-check-certificate',
-      '--no-warnings',
-      '--prefer-free-formats',
-      '--add-header', 'referer:youtube.com'
-    ])
-
-    // Collect stdout for debugging
-    let stdoutData = ''
-    ytDlpProcess.stdout.on('data', (data) => {
-      stdoutData += data.toString()
-      console.log(`[Transcode][${videoId}] yt-dlp stdout: ${data}`)
-    })
-
-    // Collect stderr for debugging
-    let stderrData = ''
-    ytDlpProcess.stderr.on('data', (data) => {
-      stderrData += data.toString()
-      console.error(`[Transcode][${videoId}] yt-dlp stderr: ${data}`)
-    })
-
-    // Wait for the process to complete
-    const exitCode = await new Promise<number>((resolve) => {
-      ytDlpProcess.on('close', resolve)
-    })
-
-    console.log(`[Transcode][${videoId}] yt-dlp process exited with code ${exitCode}`)
-
-    if (exitCode !== 0) {
-      throw new Error(`yt-dlp process failed with exit code ${exitCode}. stderr: ${stderrData}`)
-    }
-
-    // Verify the file exists and get its stats
-    if (!fs.existsSync(tempFile)) {
-      throw new Error(`Output file does not exist at ${tempFile}`)
-    }
-
-    const stats = fs.statSync(tempFile)
-    console.log(`[Transcode][${videoId}] Output file stats:`, {
-      size: stats.size,
-      created: stats.birthtime,
-      modified: stats.mtime
-    })
-
-    if (stats.size === 0) {
-      throw new Error('Output file is empty')
-    }
-
-    // Read and return the file
-    const data = fs.readFileSync(tempFile)
-    console.log(`[Transcode][${videoId}] Read ${data.length} bytes from output file`)
-
-    const duration = Date.now() - startTime
-    console.log(`[Transcode][${videoId}] Complete! Duration: ${duration}ms`)
-
-    // Clean up the temp file
     try {
-      fs.unlinkSync(tempFile)
-      console.log(`[Transcode][${videoId}] Successfully deleted temp file: ${tempFile}`)
-    } catch (unlinkError) {
-      console.error(`[Transcode][${videoId}] Error deleting temp file:`, {
-        path: tempFile,
-        error: unlinkError instanceof Error ? unlinkError.message : String(unlinkError),
-        code: unlinkError instanceof Error && 'code' in unlinkError ? unlinkError.code : undefined
+      // Import dynamically to reduce cold start time
+      const { transcodeYouTubeVideo } = await import('@/lib/transcoder')
+      
+      // Get server config (throttling settings, etc)
+      const config = getServerRuntimeConfig()
+      
+      // Apply throttling based on server config
+      const throttledTranscode = throttle(transcodeYouTubeVideo, config.concurrentRequests || 2)
+      
+      // Get audio data with proper error handling
+      const audioData = await throttledTranscode(videoId)
+      
+      if (!audioData || !audioData.buffer) {
+        throw new Error('Failed to transcode video')
+      }
+      
+      // Return audio data as MP3
+      return new NextResponse(audioData.buffer, {
+        headers: {
+          'Content-Type': 'audio/mpeg',
+          'Content-Length': audioData.buffer.length.toString(),
+          'Cache-Control': 'public, max-age=86400', // Cache for 24 hours
+        },
       })
+    } finally {
+      // Always decrement the counter
+      ongoingRequests--
     }
-
-    return new NextResponse(data, {
-      status: 200,
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Content-Length': data.length.toString(),
-        'Content-Disposition': `attachment; filename="${videoId}.mp3"`,
-      },
-    })
   } catch (error) {
-    const duration = Date.now() - startTime
-    console.error(`[Transcode][${videoId}] Process failed after ${duration}ms:`, {
-      error: error instanceof Error ? {
-        name: error.name,
-        message: error.message,
-        stack: error.stack
-      } : String(error),
-      tempFileExists: fs.existsSync(tempFile)
-    })
-
-    const message = error instanceof Error ? error.message : String(error)
+    console.error('[API] Transcode error:', error)
     return NextResponse.json(
-      { error: 'Transcode failed', message },
+      { 
+        success: false, 
+        message: error instanceof Error ? error.message : 'Unknown error occurred' 
+      },
       { status: 500 }
     )
   }
