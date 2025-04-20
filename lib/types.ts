@@ -1,20 +1,24 @@
 export interface Track {
   id: string
   name: string
-  artists: string[]
-  album: string
-  albumImageUrl: string | null
-  duration: number
-  spotifyUrl: string
+  artist: string
+  artists?: string[]  // Optional for backward compatibility
+  album?: string
+  duration?: number
   youtubeId: string | null
   youtubeTitle: string | null
   youtubeThumbnail: string | null
+  spotifyUrl?: string
+  verified: boolean
+  verificationAttempts: number
 }
 
 export interface YouTubeVideo {
   id: string
   title: string
-  thumbnail: string
+  thumbnailUrl: string
+  channelTitle?: string
+  duration?: string
 }
 
 export interface SpotifyTokenResponse {

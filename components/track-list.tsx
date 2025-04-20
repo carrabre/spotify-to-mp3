@@ -9,13 +9,16 @@ import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
 
-interface TrackListProps {
+export interface TrackListProps {
   tracks: Track[]
-  onDownload: (track: Track) => void
-  onRetry: (track: Track) => void
+  onVerifyMatch: (track: Track) => Promise<void>
+  onDownload: (track: Track) => Promise<void>
+  onRetryDownload: (track: Track) => Promise<void>
   downloadingTracks: Record<string, boolean>
   downloadProgress: Record<string, number>
   downloadErrors: Record<string, string>
+  matchingTrackIds: Set<string>
+  verifyingTrack: string | null
 }
 
 export default function TrackList({

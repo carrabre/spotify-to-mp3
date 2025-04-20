@@ -8,24 +8,22 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Search, Loader2, Check, Music } from "lucide-react"
 import Image from "next/image"
-import type { YouTubeVideo } from "@/lib/types"
+import type { Track, YouTubeVideo } from "@/lib/types"
 
-interface YouTubeSearchModalProps {
+export interface YouTubeSearchModalProps {
   isOpen: boolean
   onClose: () => void
-  trackName: string
-  artistName: string
-  onSelectVideo: (video: YouTubeVideo) => void
+  track: Track | null
+  onSelect: (video: YouTubeVideo) => void
 }
 
 export default function YouTubeSearchModal({
   isOpen,
   onClose,
-  trackName,
-  artistName,
-  onSelectVideo,
+  track,
+  onSelect,
 }: YouTubeSearchModalProps) {
-  const [searchQuery, setSearchQuery] = useState(`${artistName} - ${trackName}`)
+  const [searchQuery, setSearchQuery] = useState(`${track?.artist} - ${track?.name}`)
   const [isSearching, setIsSearching] = useState(false)
   const [isAutoSearching, setIsAutoSearching] = useState(true)
   const [searchResults, setSearchResults] = useState<YouTubeVideo[]>([])
@@ -37,7 +35,7 @@ export default function YouTubeSearchModal({
     if (isOpen && isAutoSearching) {
       handleAutoSearch()
     }
-  }, [isOpen, isAutoSearching])
+  }, [isOpen])
 
   // Function to automatically search for the best match
   const handleAutoSearch = async () => {
@@ -46,65 +44,36 @@ export default function YouTubeSearchModal({
 
     try {
       // Create a search query that's likely to find the right music video
-      const enhancedQuery = `${artistName} - ${trackName} official audio`
+      const enhancedQuery = `${track?.artist} - ${track?.name} official audio`
 
       // Search for videos
-      const response = await fetch(`/api/youtube/search?query=${encodeURIComponent(enhancedQuery)}`)
+      const response = await fetch(`/api/youtube/search?q=${encodeURIComponent(enhancedQuery)}`)
+      const data = await response.json()
 
-      if (!response.ok) {
-        throw new Error(`Search request failed with status ${response.status}`)
+      if (data.videos) {
+        setSearchResults(data.videos)
       }
-
-      const videos: YouTubeVideo[] = await response.json()
-
-      if (videos.length === 0) {
-        setError("No videos found. Try a different search term.")
-        setIsAutoSearching(false)
-        setIsSearching(false)
-        return
-      }
-
-      setSearchResults(videos)
-
-      // Select the first video by default
-      setSelectedVideoId(videos[0].id)
-
-      // If we found results, stop auto-searching
-      setIsAutoSearching(false)
-    } catch (err) {
-      console.error("Error in auto-search:", err)
+    } catch (error) {
+      console.error("Error searching YouTube:", error)
       setError("Automatic search failed. Please search manually.")
-      setIsAutoSearching(false)
     } finally {
       setIsSearching(false)
     }
   }
 
   // Function to manually search YouTube
-  const handleSearch = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault()
-
-    if (!searchQuery.trim()) return
-
+  const handleSearch = async () => {
     setIsSearching(true)
-    setError(null)
 
     try {
-      const response = await fetch(`/api/youtube/search?query=${encodeURIComponent(searchQuery)}`)
+      const response = await fetch(`/api/youtube/search?q=${encodeURIComponent(searchQuery)}`)
+      const data = await response.json()
 
-      if (!response.ok) {
-        throw new Error(`Search request failed with status ${response.status}`)
+      if (data.videos) {
+        setSearchResults(data.videos)
       }
-
-      const videos: YouTubeVideo[] = await response.json()
-
-      setSearchResults(videos)
-
-      if (videos.length === 0) {
-        setError("No results found. Try a different search term.")
-      }
-    } catch (err) {
-      console.error("Error searching YouTube:", err)
+    } catch (error) {
+      console.error("Error searching YouTube:", error)
       setError("Failed to search YouTube. Please try again.")
     } finally {
       setIsSearching(false)
@@ -114,7 +83,7 @@ export default function YouTubeSearchModal({
   // Function to handle video selection
   const handleSelectVideo = (video: YouTubeVideo) => {
     setSelectedVideoId(video.id)
-    onSelectVideo(video)
+    onSelect(video)
     onClose()
   }
 
@@ -123,12 +92,48 @@ export default function YouTubeSearchModal({
     if (videoId.match(/^[a-zA-Z0-9_-]{11}$/)) {
       const video: YouTubeVideo = {
         id: videoId,
-        title: `${trackName} - ${artistName}`,
-        thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+        title: `${track?.name} - ${track?.artist}`,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+        channelTitle: "Generated Match",
+        duration: "0:00"
       }
 
       setSelectedVideoId(videoId)
-      onSelectVideo(video)
+      onSelect(video)
+      onClose()
+    }
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleSearch()
+    }
+  }
+
+  const handleSkip = () => {
+    if (track) {
+      // Generate a deterministic video ID based on track info
+      const trackInfo = `${track.name}-${track.artist}`
+      let hash = 0
+      for (let i = 0; i < trackInfo.length; i++) {
+        const char = trackInfo.charCodeAt(i)
+        hash = ((hash << 5) - hash) + char
+        hash = hash & hash // Convert to 32-bit integer
+      }
+      
+      // Convert hash to a YouTube-like ID (11 characters)
+      const videoId = Math.abs(hash).toString(36).substring(0, 11)
+
+      const video: YouTubeVideo = {
+        id: videoId,
+        title: `${track.name} - ${track.artist}`,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+        channelTitle: "Generated Match",
+        duration: "0:00"
+      }
+
+      setSelectedVideoId(videoId)
+      onSelect(video)
       onClose()
     }
   }
@@ -137,7 +142,7 @@ export default function YouTubeSearchModal({
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-lg">Find YouTube video for: {trackName}</DialogTitle>
+          <DialogTitle className="text-lg">Find YouTube video for: {track?.name}</DialogTitle>
         </DialogHeader>
 
         <div className="mt-4 space-y-4">
@@ -149,17 +154,18 @@ export default function YouTubeSearchModal({
             </div>
           ) : (
             <>
-              <form onSubmit={(e) => handleSearch(e)} className="flex gap-2">
+              <div className="flex gap-2">
                 <Input
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyPress={handleKeyPress}
                   placeholder="Search YouTube..."
                   className="flex-1"
                 />
-                <Button type="submit" disabled={isSearching}>
-                  {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                <Button onClick={handleSearch} disabled={isSearching}>
+                  {isSearching ? <Loader2 className="animate-spin" /> : <Search />}
                 </Button>
-              </form>
+              </div>
 
               {error && <p className="text-red-500 text-sm">{error}</p>}
 
@@ -217,28 +223,41 @@ export default function YouTubeSearchModal({
                     {searchResults.map((video) => (
                       <div
                         key={video.id}
-                        className={`flex items-center gap-3 p-2 rounded-md cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 ${
+                        className={`flex gap-4 p-2 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 ${
                           selectedVideoId === video.id ? "bg-gray-100 dark:bg-gray-800" : ""
                         }`}
                         onClick={() => handleSelectVideo(video)}
                       >
-                        <div className="flex-shrink-0">
-                          <Image
-                            src={
-                              video.thumbnail ||
-                              `/placeholder.svg?height=90&width=120&query=${encodeURIComponent(video.title)}`
-                            }
-                            alt={video.title}
-                            width={120}
-                            height={90}
-                            className="rounded-md"
-                          />
+                        <div className="relative w-32 h-24 flex-shrink-0">
+                          {video.thumbnailUrl ? (
+                            <Image
+                              src={video.thumbnailUrl}
+                              alt={video.title}
+                              fill
+                              className="object-cover rounded"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center">
+                              <Music className="w-8 h-8 text-gray-400" />
+                            </div>
+                          )}
                         </div>
-                        <div className="flex-1">
-                          <p className="text-sm font-medium">{video.title}</p>
-                          <p className="text-xs text-gray-500">youtube.com/watch?v={video.id}</p>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium line-clamp-2">{video.title}</p>
+                          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                            {video.channelTitle}
+                          </p>
+                          {video.duration && (
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                              Duration: {video.duration}
+                            </p>
+                          )}
                         </div>
-                        {selectedVideoId === video.id && <Check className="h-5 w-5 text-green-500" />}
+                        {selectedVideoId === video.id && (
+                          <div className="flex items-center">
+                            <Check className="w-5 h-5 text-green-500" />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -266,6 +285,15 @@ export default function YouTubeSearchModal({
             </>
           )}
         </div>
+
+        {searchResults.length === 0 && !isSearching && !isAutoSearching && (
+          <div className="text-center py-8">
+            <p className="text-gray-500 dark:text-gray-400 mb-4">No results found</p>
+            <Button onClick={handleSkip} variant="outline">
+              Skip YouTube match
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )

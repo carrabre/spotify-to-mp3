@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useRef, useEffect } from "react"
-import { Music, Search, FileSpreadsheet, Loader2, AlertCircle, Info, Package, RefreshCw } from "lucide-react"
+import { Music, Search, FileSpreadsheet, Loader2, AlertCircle, Info, Package, RefreshCw, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -14,7 +14,7 @@ import { generateExcel } from "@/lib/excel"
 import TrackList from "@/components/track-list"
 import YouTubeSearchModal from "@/components/youtube-search-modal"
 import DownloadModal from "@/components/download-modal"
-import ZipDownloadModal from "@/components/zip-download-modal"
+import { useDownloadStore } from "@/lib/stores/download-store"
 import type { Track, YouTubeVideo } from "@/lib/types"
 
 // Maximum number of concurrent requests
@@ -39,13 +39,16 @@ export default function SpotifyConverter() {
   // YouTube search modal state
   const [searchModalOpen, setSearchModalOpen] = useState(false)
   const [downloadModalOpen, setDownloadModalOpen] = useState(false)
-  const [zipModalOpen, setZipModalOpen] = useState(false)
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null)
 
-  // ZIP download state
-  const [zipDownloading, setZipDownloading] = useState(false)
-  const [zipProgress, setZipProgress] = useState(0)
-  const downloadLinkRef = useRef<HTMLAnchorElement | null>(null)
+  // Batch download state
+  const [batchDownloadInProgress, setBatchDownloadInProgress] = useState(false)
+  const [batchDownloadProgress, setBatchDownloadProgress] = useState(0)
+  const [batchCurrentTrack, setBatchCurrentTrack] = useState<string | null>(null)
+  const [batchProcessedCount, setBatchProcessedCount] = useState(0)
+  const [batchTotalTracks, setBatchTotalTracks] = useState(0)
+  const [downloadLogs, setDownloadLogs] = useState<string[]>([])
+  const [downloadedFiles, setDownloadedFiles] = useState<{ name: string, data: Blob }[]>([])
 
   // Auto-match tracks when they're loaded
   useEffect(() => {
@@ -66,16 +69,15 @@ export default function SpotifyConverter() {
     setError(null)
     setWarning(null)
     setProcessingStatus("Fetching tracks from Spotify...")
+    setAutoMatchingProgress(0)
 
     try {
-      // Fetch tracks via our new server-side API (no client credentials required)
       const response = await fetch(`/api/spotify?url=${encodeURIComponent(spotifyUrl)}`)
       if (!response.ok) throw new Error(`Spotify API returned status ${response.status}`)
       const spotifyTracks = await response.json()
 
       setProcessingStatus(`Found ${spotifyTracks.length} tracks. Preparing for verification...`)
 
-      // Initialize tracks without YouTube matches
       const initialTracks = spotifyTracks.map((track: any) => ({
         ...track,
         youtubeId: null,
@@ -86,15 +88,11 @@ export default function SpotifyConverter() {
       }))
 
       setTracks(initialTracks)
-
-      // Auto-matching will be triggered by the useEffect
-      setWarning("Automatically matching tracks with YouTube videos. Please wait...")
+      setWarning("Automatically matching tracks with YouTube videos...")
     } catch (err) {
-      console.error("Error in handleSubmit:", err)
       setError(err instanceof Error ? err.message : "An error occurred while processing your request")
     } finally {
       setLoading(false)
-      setProcessingStatus("")
     }
   }
 
@@ -107,7 +105,7 @@ export default function SpotifyConverter() {
   const findYouTubeMatch = async (track: Track): Promise<YouTubeVideo | null> => {
     try {
       // Strategy 1: Try the official search API first
-      const searchQuery = `${track.artists.join(" ")} - ${track.name} official audio`
+      const searchQuery = `${track.artist} - ${track.name} official audio`
       const response = await fetch(`/api/youtube/search?query=${encodeURIComponent(searchQuery)}`)
 
       if (response.ok) {
@@ -118,7 +116,7 @@ export default function SpotifyConverter() {
       }
 
       // Strategy 2: If the API fails, try a simplified search query
-      const simplifiedQuery = `${track.name} ${track.artists[0]} audio`
+      const simplifiedQuery = `${track.name} ${track.artist} audio`
       const fallbackResponse = await fetch(
         `/api/youtube/search?query=${encodeURIComponent(simplifiedQuery)}&fallback=true`,
       )
@@ -132,13 +130,13 @@ export default function SpotifyConverter() {
 
       // Strategy 3: Generate a deterministic video ID based on track info
       // This is a last resort when all searches fail
-      const hash = await generateHashFromString(`${track.name}${track.artists.join("")}`)
+      const hash = await generateHashFromString(`${track.name}${track.artist}`)
       const videoId = `dQw4w9WgXcQ` // Default to a known video ID that exists
 
       return {
         id: videoId,
-        title: `${track.artists.join(", ")} - ${track.name} (Audio)`,
-        thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+        title: `${track.artist} - ${track.name} (Audio)`,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
       }
     } catch (error) {
       console.error(`Error finding match for "${track.name}":`, error)
@@ -185,7 +183,7 @@ export default function SpotifyConverter() {
                     ...t,
                     youtubeId: video.id,
                     youtubeTitle: video.title,
-                    youtubeThumbnail: video.thumbnail,
+                    youtubeThumbnail: video.thumbnailUrl,
                     verified: true,
                     verificationAttempts: (t.verificationAttempts || 0) + 1,
                   }
@@ -258,7 +256,7 @@ export default function SpotifyConverter() {
               ...t,
               youtubeId: video.id,
               youtubeTitle: video.title,
-              youtubeThumbnail: video.thumbnail,
+              youtubeThumbnail: video.thumbnailUrl,
               verified: true,
               verificationAttempts: (t.verificationAttempts || 0) + 1,
             }
@@ -317,7 +315,7 @@ export default function SpotifyConverter() {
           ...track,
           youtubeId: video.id,
           youtubeTitle: video.title,
-          youtubeThumbnail: video.thumbnail,
+          youtubeThumbnail: video.thumbnailUrl,
           verified: true,
         }
       }
@@ -387,38 +385,31 @@ export default function SpotifyConverter() {
 
       return new Promise<void>((resolve) => {
         const progressInterval = setInterval(() => {
-          // Increase progress at a reasonable rate
-          progress += Math.random() * 5 + 2 // 2-7% per update
+          // Increase progress in smaller increments (1-3% per update)
+          progress += Math.random() * 2 + 1
 
           if (progress >= 100) {
-            // Cap at 100% when complete
             progress = 100
             clearInterval(progressInterval)
-
-            console.log(`[Client][${downloadId}] Progress complete for track "${track.name}": 100%`)
             setDownloadProgress((prev) => ({ ...prev, [track.id]: 100 }))
 
-            // Use fetch with blob() method to properly handle binary data
             fetch(downloadUrl)
-              .then(response => {
+              .then(async response => {
                 const contentType = response.headers.get('content-type');
                 
                 if (contentType && contentType.includes('application/json')) {
                   // If the response is JSON, it's an error response
-                  console.log(`[Client][${downloadId}] Server returned JSON (error). Content-Type: ${contentType}`);
+                  const errorData = await response.json();
+                  console.error(`[Client][${downloadId}] Download error:`, errorData);
+                  setDownloadErrors((prev) => ({
+                    ...prev,
+                    [track.id]: errorData.message || "Download failed. Please try alternative options.",
+                  }));
                   
-                  // Get the actual error response
-                  return response.json().then(errorData => {
-                    console.error(`[Client][${downloadId}] Download error:`, errorData);
-                    setDownloadErrors((prev) => ({
-                      ...prev,
-                      [track.id]: errorData.message || "Download failed. Please try alternative options.",
-                    }));
-                    
-                    // Show download modal with alternative options
-                    setCurrentTrack(track);
-                    setDownloadModalOpen(true);
-                  });
+                  // Show download modal with alternative options
+                  setCurrentTrack(track);
+                  setDownloadModalOpen(true);
+                  return;
                 } 
                 
                 if (!response.ok) {
@@ -426,30 +417,16 @@ export default function SpotifyConverter() {
                 }
                 
                 // For successful responses, convert to blob to handle binary data properly
-                return response.blob();
-              })
-              .then(blob => {
-                if (!blob) return; // Skip if blob is undefined (happens when handling JSON error)
+                const blob = await response.blob();
                 
                 // Verify the blob is an audio file
                 if (!blob.type || !blob.type.includes('audio/')) {
-                  console.error(`[Client][${downloadId}] Received non-audio blob: ${blob.type}`);
-                  setDownloadErrors((prev) => ({
-                    ...prev,
-                    [track.id]: "Received non-audio data. Please try alternative options.",
-                  }));
-                  
-                  // Show download modal with alternative options
-                  setCurrentTrack(track);
-                  setDownloadModalOpen(true);
-                  return;
+                  throw new Error("Received non-audio data");
                 }
-                
-                console.log(`[Client][${downloadId}] Received audio blob of type ${blob.type}, size: ${blob.size} bytes`);
                 
                 // Create a blob URL and trigger download
                 const blobUrl = URL.createObjectURL(blob);
-                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`;
+                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artist.replace(/[^a-z0-9]/gi, "_")}.mp3`;
                 
                 // Create a download link
                 const downloadLink = document.createElement('a');
@@ -466,7 +443,6 @@ export default function SpotifyConverter() {
                 setTimeout(() => {
                   document.body.removeChild(downloadLink);
                   URL.revokeObjectURL(blobUrl);
-                  console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`);
                 }, 100);
               })
               .catch(error => {
@@ -489,12 +465,11 @@ export default function SpotifyConverter() {
                 }, 2000)
               });
           } else {
-            // Update progress
-            const roundedProgress = Math.min(Math.round(progress), 99)
-            console.log(`[Client][${downloadId}] Progress update for track "${track.name}": ${roundedProgress}%`)
+            // Update progress in smaller increments
+            const roundedProgress = Math.min(Math.round(progress * 10) / 10, 99)
             setDownloadProgress((prev) => ({ ...prev, [track.id]: roundedProgress }))
           }
-        }, 300) // Update every 300ms for smoother progress
+        }, 150) // Update more frequently for smoother progress
       })
     } catch (error) {
       console.error(`[Client][${downloadId}] Error downloading track "${track.name}":`, error)
@@ -534,38 +509,32 @@ export default function SpotifyConverter() {
       console.log(`[Client][${downloadId}] Starting progress simulation for retry "${track.name}"`)
 
       const progressInterval = setInterval(() => {
-        // Increase progress at a reasonable rate
-        progress += Math.random() * 7 + 3 // Faster progress for retry (3-10% per update)
+        // Increase progress in smaller increments (1.5-3.5% per update)
+        progress += Math.random() * 2 + 1.5
 
         if (progress >= 100) {
-          // Cap at 100% when complete
           progress = 100
           clearInterval(progressInterval)
-
-          console.log(`[Client][${downloadId}] Retry progress complete for track "${track.name}": 100%`)
           setDownloadProgress((prev) => ({ ...prev, [track.id]: 100 }))
 
           // Use fetch with blob() method to properly handle binary data
           fetch(downloadUrl)
-            .then(response => {
+            .then(async response => {
               const contentType = response.headers.get('content-type');
               
               if (contentType && contentType.includes('application/json')) {
                 // If the response is JSON, it's an error response
-                console.log(`[Client][${downloadId}] Server returned JSON (error). Content-Type: ${contentType}`);
+                const errorData = await response.json();
+                console.error(`[Client][${downloadId}] Retry download error:`, errorData);
+                setDownloadErrors((prev) => ({
+                  ...prev,
+                  [track.id]: errorData.message || "Retry download failed. Please try alternative options.",
+                }));
                 
-                // Get the actual error response
-                return response.json().then(errorData => {
-                  console.error(`[Client][${downloadId}] Retry download error:`, errorData);
-                  setDownloadErrors((prev) => ({
-                    ...prev,
-                    [track.id]: errorData.message || "Retry download failed. Please try alternative options.",
-                  }));
-                  
-                  // Show download modal with alternative options
-                  setCurrentTrack(track);
-                  setDownloadModalOpen(true);
-                });
+                // Show download modal with alternative options
+                setCurrentTrack(track);
+                setDownloadModalOpen(true);
+                return;
               } 
               
               if (!response.ok) {
@@ -573,30 +542,16 @@ export default function SpotifyConverter() {
               }
               
               // For successful responses, convert to blob to handle binary data properly
-              return response.blob();
-            })
-            .then(blob => {
-              if (!blob) return; // Skip if blob is undefined (happens when handling JSON error)
+              const blob = await response.blob();
               
               // Verify the blob is an audio file
               if (!blob.type || !blob.type.includes('audio/')) {
-                console.error(`[Client][${downloadId}] Received non-audio blob: ${blob.type}`);
-                setDownloadErrors((prev) => ({
-                  ...prev,
-                  [track.id]: "Received non-audio data. Please try alternative options.",
-                }));
-                
-                // Show download modal with alternative options
-                setCurrentTrack(track);
-                setDownloadModalOpen(true);
-                return;
+                throw new Error("Received non-audio data");
               }
-              
-              console.log(`[Client][${downloadId}] Received audio blob of type ${blob.type}, size: ${blob.size} bytes`);
               
               // Create a blob URL and trigger download
               const blobUrl = URL.createObjectURL(blob);
-              const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`;
+              const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artist.replace(/[^a-z0-9]/gi, "_")}.mp3`;
               
               // Create a download link
               const downloadLink = document.createElement('a');
@@ -613,7 +568,6 @@ export default function SpotifyConverter() {
               setTimeout(() => {
                 document.body.removeChild(downloadLink);
                 URL.revokeObjectURL(blobUrl);
-                console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`);
               }, 100);
             })
             .catch(error => {
@@ -635,12 +589,11 @@ export default function SpotifyConverter() {
               }, 2000)
             });
         } else {
-          // Update progress
-          const roundedProgress = Math.min(Math.round(progress), 99)
-          console.log(`[Client][${downloadId}] Retry progress update for track "${track.name}": ${roundedProgress}%`)
+          // Update progress in smaller increments
+          const roundedProgress = Math.min(Math.round(progress * 10) / 10, 99)
           setDownloadProgress((prev) => ({ ...prev, [track.id]: roundedProgress }))
         }
-      }, 200) // Update every 200ms for smoother progress on retry
+      }, 100) // Update more frequently for smoother progress
     } catch (error) {
       console.error(`[Client][${downloadId}] Error retrying download:`, error)
       setDownloadErrors((prev) => ({
@@ -655,37 +608,142 @@ export default function SpotifyConverter() {
     }
   }
 
-  // Open the ZIP download modal
-  const handleOpenZipModal = () => {
-    setZipModalOpen(true)
+  // Function to add a log message
+  const addLog = (message: string) => {
+    console.log(`[Download] ${message}`)
+    setDownloadLogs(prev => [...prev, `${new Date().toLocaleTimeString()} - ${message}`])
   }
 
-  // Test the s-ytdl library
-  const testSYtdl = async () => {
-    console.log(`[Client] Testing download functionality`)
-    setWarning("Testing download functionality, please wait...")
+  // Function to download a single track
+  const downloadTrack = async (track: Track): Promise<{ name: string, data: Blob } | null> => {
+    if (!track.youtubeId) {
+      addLog(`Skipping track "${track.name}" - No YouTube ID`)
+      return null
+    }
 
     try {
-      // Use our simplified endpoint that doesn't rely on s-ytdl
-      const response = await fetch("/api/ytdl-simple?videoId=dQw4w9WgXcQ&test=true")
-
+      addLog(`Starting download for "${track.name}" (ID: ${track.youtubeId})`)
+      const response = await fetch(`/api/transcode?videoId=${track.youtubeId}`)
+      
       if (!response.ok) {
-        throw new Error(`API returned status ${response.status}`)
+        addLog(`Failed to download "${track.name}" - HTTP ${response.status}`)
+        throw new Error(`Failed to download track: ${track.name}`)
       }
-
-      const data = await response.json()
-
-      if (data.success) {
-        console.log(`[Client] Download test successful:`, data)
-        setWarning(`Download test successful! The API endpoint is working correctly  data)
-        setWarning(\`Download test successful! The API endpoint is working correctly.`)
-      } else {
-        console.error(`[Client] Download test failed:`, data)
-        setError(`Download test failed: ${data.error || "Unknown error"}`)
+      
+      const blob = await response.blob()
+      const fileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}.mp3`
+      
+      addLog(`Successfully downloaded "${track.name}" (${(blob.size / 1024 / 1024).toFixed(2)} MB)`)
+      
+      return {
+        name: fileName,
+        data: blob
       }
     } catch (error) {
-      console.error(`[Client] Error testing download functionality:`, error)
-      setError(`Error testing download: ${error instanceof Error ? error.message : String(error)}`)
+      console.error(`Error downloading track ${track.name}:`, error)
+      addLog(`Error downloading "${track.name}": ${error instanceof Error ? error.message : 'Unknown error'}`)
+      return null
+    }
+  }
+
+  const downloadAllTracks = async () => {
+    if (tracks.length === 0) {
+      addLog("No tracks to download")
+      return
+    }
+    
+    setBatchDownloadInProgress(true)
+    addLog(`Starting batch download of ${tracks.length} tracks`)
+    setBatchTotalTracks(tracks.length)
+    setBatchProcessedCount(0)
+    setBatchDownloadProgress(0)
+    setDownloadedFiles([])
+    
+    const verifiedTracks = tracks.filter(track => track.youtubeId && track.verified)
+    addLog(`Found ${verifiedTracks.length} verified tracks with YouTube IDs`)
+    
+    let completed = 0
+    let successful = 0
+    let failed = 0
+    const downloadedFiles: { name: string, data: Blob }[] = []
+
+    try {
+      for (const track of verifiedTracks) {
+        setBatchCurrentTrack(track.name)
+        setBatchProcessedCount(completed)
+        setBatchDownloadProgress(Math.round((completed / verifiedTracks.length) * 1000) / 10)
+
+        addLog(`Processing track ${completed + 1}/${verifiedTracks.length}: "${track.name}"`)
+        const result = await downloadTrack(track)
+        
+        if (result) {
+          downloadedFiles.push(result)
+          successful++
+          addLog(`Added "${track.name}" to zip queue`)
+        } else {
+          failed++
+        }
+        
+        completed++
+      }
+
+      addLog(`Download complete: ${successful} successful, ${failed} failed`)
+      setDownloadedFiles(downloadedFiles)
+      
+      // Automatically create and download the zip file
+      await createAndDownloadZip(downloadedFiles)
+      
+      setBatchDownloadProgress(100)
+      setBatchProcessedCount(completed)
+      setBatchCurrentTrack(null)
+
+    } catch (err) {
+      console.error('Error downloading tracks:', err)
+      addLog(`Batch download error: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      setError(err instanceof Error ? err.message : 'An unknown error occurred')
+    } finally {
+      setBatchDownloadInProgress(false)
+    }
+  }
+
+  const createAndDownloadZip = async (files: { name: string, data: Blob }[]) => {
+    try {
+      addLog("Creating ZIP file...")
+      const formData = new FormData()
+      files.forEach(file => {
+        formData.append('files', file.data, file.name)
+      })
+
+      addLog(`Sending ${files.length} files to server for ZIP creation`)
+      const response = await fetch('/api/create-zip', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!response.ok) {
+        addLog(`Failed to create ZIP file - HTTP ${response.status}`)
+        throw new Error('Failed to create zip file')
+      }
+
+      const blob = await response.blob()
+      addLog(`ZIP file created successfully (${(blob.size / 1024 / 1024).toFixed(2)} MB)`)
+      
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'spotify-tracks.zip'
+      document.body.appendChild(a)
+      a.click()
+      
+      // Clean up
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+      addLog("ZIP file download initiated")
+
+    } catch (err) {
+      console.error('Error creating zip file:', err)
+      addLog(`Error creating ZIP file: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      setError(err instanceof Error ? err.message : 'Failed to create zip file')
     }
   }
 
@@ -693,44 +751,31 @@ export default function SpotifyConverter() {
   const verifiedTracksCount = tracks.filter((track) => track.youtubeId && track.verified).length
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardContent className="pt-6">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="relative flex-1">
-                <Music className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                <Input
-                  placeholder="Paste Spotify URL (track, album or playlist)"
-                  value={spotifyUrl}
-                  onChange={(e) => setSpotifyUrl(e.target.value)}
-                  className="pl-10"
-                  disabled={loading}
-                />
-              </div>
-              <Button type="submit" disabled={loading || !spotifyUrl}>
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing
-                  </>
-                ) : (
-                  <>
-                    <Search className="mr-2 h-4 w-4" />
-                    Convert
-                  </>
-                )}
-              </Button>
-            </div>
-            {loading && processingStatus && (
-              <div className="text-sm text-gray-500 mt-2 flex items-center">
-                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                {processingStatus}
-              </div>
+    <div className="container mx-auto p-4 space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="flex gap-2">
+          <Input
+            type="text"
+            placeholder="Paste Spotify URL here..."
+            value={spotifyUrl}
+            onChange={(e) => setSpotifyUrl(e.target.value)}
+            className="flex-1"
+          />
+          <Button type="submit" disabled={loading || autoMatchingInProgress}>
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              <>
+                <Search className="mr-2 h-4 w-4" />
+                Load Tracks
+              </>
             )}
-          </form>
-        </CardContent>
-      </Card>
+          </Button>
+        </div>
+      </form>
 
       {error && (
         <Alert variant="destructive">
@@ -740,104 +785,108 @@ export default function SpotifyConverter() {
       )}
 
       {warning && (
-        <Alert variant="warning" className="bg-amber-50 text-amber-800 border-amber-200">
+        <Alert>
           <Info className="h-4 w-4" />
           <AlertDescription>{warning}</AlertDescription>
         </Alert>
       )}
 
+      {processingStatus && (
+        <div className="text-sm text-muted-foreground">{processingStatus}</div>
+      )}
+
+      {/* Video Loading Progress */}
       {autoMatchingInProgress && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
-          <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">
-            <span>Automatically matching tracks with YouTube videos...</span>
-            <span>{autoMatchingProgress}%</span>
+        <div className="space-y-2">
+          <div className="flex justify-between text-sm">
+            <span>Matching tracks with YouTube videos: {Math.round(autoMatchingProgress)}%</span>
+            <span>{tracks.filter(t => t.verified).length} of {tracks.length} tracks matched</span>
           </div>
           <Progress value={autoMatchingProgress} className="h-2" />
+          {matchingTrackIds.size > 0 && (
+            <div className="text-sm text-muted-foreground animate-pulse">
+              Currently matching {matchingTrackIds.size} track{matchingTrackIds.size !== 1 ? 's' : ''}...
+            </div>
+          )}
         </div>
       )}
 
       {tracks.length > 0 && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold">
-                {tracks.length} {tracks.length === 1 ? "Track" : "Tracks"} Found
-              </h2>
-              {verifiedTracksCount > 0 && (
-                <Button variant="default" className="bg-green-600 hover:bg-green-700" onClick={handleOpenZipModal}>
-                  <Package className="mr-2 h-4 w-4" />
-                  Download All ({verifiedTracksCount})
+        <Card>
+          <CardContent className="p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">
+                {tracks.length} Track{tracks.length !== 1 && "s"}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={handleExportExcel}>
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  Export to Excel
                 </Button>
-              )}
-            </div>
-            <div className="flex gap-2">
-              {!autoMatchingInProgress && tracks.some((track) => !track.verified) && (
-                <Button variant="outline" onClick={handleAutoMatchAll}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Auto-Match All
+                <Button 
+                  onClick={downloadAllTracks}
+                  disabled={batchDownloadInProgress || tracks.length === 0}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download All ({tracks.length})
                 </Button>
-              )}
-              {!autoMatchingInProgress && (
-                <>
-                  <Button variant="outline" onClick={testSYtdl} className="mr-2">
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Test API
-                  </Button>
-                  <Button variant="outline" onClick={runDiagnosticTest}>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Run Diagnostics
-                  </Button>
-                </>
-              )}
-              <Button variant="outline" onClick={handleExportExcel}>
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Export to Excel
-              </Button>
+              </div>
             </div>
-          </div>
 
-          <div className="space-y-6">
+            {/* Batch Download Progress */}
+            {batchDownloadInProgress && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Progress: {Math.round(batchDownloadProgress)}%</span>
+                  <span>{batchProcessedCount} of {batchTotalTracks} tracks</span>
+                </div>
+                
+                <Progress value={batchDownloadProgress} className="h-2" />
+                
+                {batchCurrentTrack && (
+                  <div className="text-sm text-muted-foreground truncate">
+                    Downloading: {batchCurrentTrack}
+                  </div>
+                )}
+                
+                {/* Download logs */}
+                <div className="mt-4 max-h-40 overflow-y-auto border rounded-md p-2 bg-muted/50">
+                  <div className="text-xs font-mono space-y-1">
+                    {downloadLogs.map((log, index) => (
+                      <div key={index} className="truncate">{log}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <TrackList
               tracks={tracks}
+              onVerifyMatch={handleVerifyMatch}
               onDownload={handleDownloadTrack}
-              onRetry={handleRetryDownload}
+              onRetryDownload={handleRetryDownload}
               downloadingTracks={downloadingTracks}
               downloadProgress={downloadProgress}
               downloadErrors={downloadErrors}
+              matchingTrackIds={matchingTrackIds}
+              verifyingTrack={verifyingTrack}
             />
-
-            <div className="mb-4 text-sm text-gray-600 dark:text-gray-400 p-3 bg-gray-100 dark:bg-gray-700 rounded-md">
-              <p>
-                <strong>Note:</strong> Downloads will open in a new tab. If you encounter any issues, try the retry
-                options.
-              </p>
-              <p className="mt-1">
-                <strong>Tip:</strong> Using quality "4" (192 kbps) provides the best audio quality. If downloads fail,
-                try quality "3" (128 kbps) which is more reliable.
-              </p>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {/* YouTube Search Modal */}
-      {currentTrack && (
-        <YouTubeSearchModal
-          isOpen={searchModalOpen}
-          onClose={() => setSearchModalOpen(false)}
-          trackName={currentTrack.name}
-          artistName={currentTrack.artists.join(" ")}
-          onSelectVideo={handleSelectVideo}
-        />
-      )}
+      <YouTubeSearchModal
+        isOpen={searchModalOpen}
+        onClose={() => setSearchModalOpen(false)}
+        track={currentTrack}
+        onSelect={handleSelectVideo}
+      />
 
-      {/* Download Modal */}
-      {currentTrack && (
-        <DownloadModal isOpen={downloadModalOpen} onClose={() => setDownloadModalOpen(false)} track={currentTrack} />
-      )}
-
-      {/* ZIP Download Modal */}
-      <ZipDownloadModal isOpen={zipModalOpen} onClose={() => setZipModalOpen(false)} tracks={tracks} />
+      <DownloadModal
+        isOpen={downloadModalOpen}
+        onClose={() => setDownloadModalOpen(false)}
+        track={currentTrack}
+      />
     </div>
   )
 }
