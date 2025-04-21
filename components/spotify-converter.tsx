@@ -387,10 +387,10 @@ export default function SpotifyConverter() {
     console.log(`[Client][${downloadId}] Set download state for track "${track.name}"`)
 
     try {
-      // Create the download URL using our new transcode endpoint which always returns MP3 data
-      const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
-      console.log(`[Client][${downloadId}] Download URL created: ${downloadUrl}`)
-
+      // First try the new transcode endpoint with YouTube.js
+      const downloadUrl = `/api/alt-transcode?videoId=${track.youtubeId}`
+      console.log(`[Client][${downloadId}] Download URL created (using YouTube.js): ${downloadUrl}`)
+      
       // Simulate progress updates
       let progress = 0
       console.log(`[Client][${downloadId}] Starting progress simulation for track "${track.name}"`)
@@ -411,11 +411,11 @@ export default function SpotifyConverter() {
             // Use fetch with blob() method to properly handle binary data
             console.log(`[Client][${downloadId}] Initiating fetch request to ${downloadUrl}`)
             fetch(downloadUrl)
-              .then((response) => {
+              .then(async (response) => {
                 // Log response details for debugging
-                const contentType = response.headers.get('content-type') || 'unknown';
-                const contentLength = response.headers.get('content-length') || 'unknown';
-                const contentDisposition = response.headers.get('content-disposition') || 'unknown';
+                const contentType = response.headers.get('content-type') || 'unknown'
+                const contentLength = response.headers.get('content-length') || 'unknown'
+                const contentDisposition = response.headers.get('content-disposition') || 'unknown'
                 
                 console.log(`[Client][${downloadId}] Response received:`, {
                   status: response.status,
@@ -424,127 +424,168 @@ export default function SpotifyConverter() {
                   contentLength,
                   contentDisposition,
                   ok: response.ok
-                });
+                })
                 
-                // Check if the response is HTML (which could happen with error pages)
-                if (contentType.includes('text/html')) {
-                  console.error(`[Client][${downloadId}] Error: Received HTML response instead of audio`);
+                // Check if the response is HTML or JSON (which could indicate an error)
+                if (contentType.includes('text/html') || (contentType.includes('application/json') && !response.ok)) {
+                  console.error(`[Client][${downloadId}] Error response received, trying fallback endpoint`, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    contentType,
+                    headers: Object.fromEntries([...response.headers.entries()].map(([k, v]) => [k, v.substring(0, 50)]))
+                  })
                   
-                  // We'll need to show the error modal with alternatives
-                  setDownloadErrors((prev) => ({
-                    ...prev,
-                    [track.id]: "Received HTML instead of audio. Please try alternative options.",
-                  }));
+                  // Try the alternative endpoint
+                  const fallbackUrl = `/api/transcode?videoId=${track.youtubeId}`
+                  console.log(`[Client][${downloadId}] Trying fallback endpoint: ${fallbackUrl}`)
                   
-                  setCurrentTrack(track);
-                  setDownloadModalOpen(true);
-                  return undefined;
-                }
-                
-                // If it's JSON, it's an error response
-                if (contentType.includes('application/json')) {
-                  console.log(`[Client][${downloadId}] Server returned JSON (error). Content-Type: ${contentType}`);
-                  
-                  // Get the actual error response
-                  return response.json().then(errorData => {
-                    console.error(`[Client][${downloadId}] Download error:`, errorData);
+                  try {
+                    const fallbackResponse = await fetch(fallbackUrl)
+                    
+                    console.log(`[Client][${downloadId}] Fallback response:`, {
+                      status: fallbackResponse.status,
+                      statusText: fallbackResponse.statusText,
+                      contentType: fallbackResponse.headers.get('content-type'),
+                      contentLength: fallbackResponse.headers.get('content-length')
+                    })
+                    
+                    // If fallback works, use it
+                    if (fallbackResponse.ok && 
+                        !fallbackResponse.headers.get('content-type')?.includes('text/html') &&
+                        !fallbackResponse.headers.get('content-type')?.includes('application/json')) {
+                      return fallbackResponse.blob()
+                    }
+                    
+                    // If fallback also fails with JSON, get the error
+                    if (fallbackResponse.headers.get('content-type')?.includes('application/json')) {
+                      const fallbackErrorData = await fallbackResponse.json()
+                      console.error(`[Client][${downloadId}] Fallback endpoint error:`, fallbackErrorData)
+                      setDownloadErrors((prev) => ({
+                        ...prev,
+                        [track.id]: fallbackErrorData.message || "Both primary and fallback download methods failed.",
+                      }))
+                    } else {
+                      setDownloadErrors((prev) => ({
+                        ...prev,
+                        [track.id]: "Both download methods failed. Please try alternative options.",
+                      }))
+                    }
+                  } catch (fallbackError) {
+                    console.error(`[Client][${downloadId}] Error with fallback endpoint:`, fallbackError)
                     setDownloadErrors((prev) => ({
                       ...prev,
-                      [track.id]: errorData.message || "Download failed. Please try alternative options.",
-                    }));
-                    
-                    // Show download modal with alternative options
-                    setCurrentTrack(track);
-                    setDownloadModalOpen(true);
-                    return undefined;
-                  });
+                      [track.id]: fallbackError instanceof Error ? fallbackError.message : "Fallback download method failed.",
+                    }))
+                  }
+                  
+                  // If the original response had JSON error details, extract them
+                  if (contentType.includes('application/json')) {
+                    try {
+                      const errorData = await response.json()
+                      console.error(`[Client][${downloadId}] Primary endpoint error details:`, errorData)
+                      // Only set the error if we haven't set one from the fallback already
+                      if (!downloadErrors[track.id]) {
+                        setDownloadErrors((prev) => ({
+                          ...prev,
+                          [track.id]: errorData.message || errorData.error || "Download failed with both methods.",
+                        }))
+                      }
+                    } catch (parseError) {
+                      console.error(`[Client][${downloadId}] Error parsing JSON error response:`, parseError)
+                    }
+                  }
+                  
+                  // Show download modal with alternative options
+                  setCurrentTrack(track)
+                  setDownloadModalOpen(true)
+                  return undefined
                 } 
                 
                 if (!response.ok) {
-                  throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
+                  throw new Error(`Server returned status ${response.status}: ${response.statusText}`)
                 }
                 
                 // For successful responses, convert to blob to handle binary data properly
-                return response.blob();
+                return response.blob()
               })
               .then(blob => {
-                if (!blob) return; // Skip if blob is undefined (happens when handling error responses)
+                if (!blob) return // Skip if blob is undefined (happens when handling error responses)
                 
                 // Log blob details
                 console.log(`[Client][${downloadId}] Blob received:`, {
                   type: blob.type || 'no-type',
                   size: blob.size,
                   timestamp: new Date().toISOString()
-                });
+                })
                 
                 // Verify the blob has some content
                 if (blob.size < 1000) {
-                  console.error(`[Client][${downloadId}] Warning: Very small file (${blob.size} bytes)`);
+                  console.error(`[Client][${downloadId}] Warning: Very small file (${blob.size} bytes)`)
                   
                   if (blob.size < 100) {
                     setDownloadErrors((prev) => ({
                       ...prev,
                       [track.id]: "Received unusually small file. Please try alternative options.",
-                    }));
+                    }))
                     
-                    setCurrentTrack(track);
-                    setDownloadModalOpen(true);
-                    return;
+                    setCurrentTrack(track)
+                    setDownloadModalOpen(true)
+                    return
                   }
                 }
                 
                 // Support various audio types, not just MP3
-                const acceptedTypes = ['audio/mpeg', 'audio/mp3', 'audio/webm', 'audio/ogg', 'audio/wav', 'audio/'];
-                const isAudioType = acceptedTypes.some(type => blob.type.includes(type));
+                const acceptedTypes = ['audio/mpeg', 'audio/mp3', 'audio/webm', 'audio/ogg', 'audio/wav', 'audio/']
+                const isAudioType = acceptedTypes.some(type => (blob.type || '').includes(type))
                 
                 // Verify the blob is an audio file
                 if (blob.type && !isAudioType) {
-                  console.error(`[Client][${downloadId}] Received non-audio blob: ${blob.type}`);
+                  console.error(`[Client][${downloadId}] Received non-audio blob: ${blob.type}`)
                   setDownloadErrors((prev) => ({
                     ...prev,
                     [track.id]: `Received non-audio data (${blob.type}). Please try alternative options.`,
-                  }));
+                  }))
                   
                   // Show download modal with alternative options
-                  setCurrentTrack(track);
-                  setDownloadModalOpen(true);
-                  return;
+                  setCurrentTrack(track)
+                  setDownloadModalOpen(true)
+                  return
                 }
                 
-                console.log(`[Client][${downloadId}] Received audio blob of type ${blob.type}, size: ${blob.size} bytes`);
+                console.log(`[Client][${downloadId}] Received audio blob of type ${blob.type}, size: ${blob.size} bytes`)
                 
                 // Create a blob URL and trigger download
-                const blobUrl = URL.createObjectURL(blob);
-                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`;
+                const blobUrl = URL.createObjectURL(blob)
+                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`
                 
                 // Create a download link
-                const downloadLink = document.createElement('a');
-                downloadLink.href = blobUrl;
-                downloadLink.download = sanitizedFileName;
-                downloadLink.style.display = 'none';
-                document.body.appendChild(downloadLink);
+                const downloadLink = document.createElement('a')
+                downloadLink.href = blobUrl
+                downloadLink.download = sanitizedFileName
+                downloadLink.style.display = 'none'
+                document.body.appendChild(downloadLink)
                 
                 // Click the download link
-                console.log(`[Client][${downloadId}] Triggering download for ${sanitizedFileName}`);
-                downloadLink.click();
+                console.log(`[Client][${downloadId}] Triggering download for ${sanitizedFileName}`)
+                downloadLink.click()
                 
                 // Clean up
                 setTimeout(() => {
-                  document.body.removeChild(downloadLink);
-                  URL.revokeObjectURL(blobUrl);
-                  console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`);
-                }, 100);
+                  document.body.removeChild(downloadLink)
+                  URL.revokeObjectURL(blobUrl)
+                  console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`)
+                }, 100)
               })
               .catch(error => {
-                console.error(`[Client][${downloadId}] Download error:`, error);
+                console.error(`[Client][${downloadId}] Download error:`, error)
                 setDownloadErrors((prev) => ({
                   ...prev,
                   [track.id]: error.message || "Error downloading file. Please try alternative options.",
-                }));
+                }))
                 
                 // Show download modal with alternative options
-                setCurrentTrack(track);
-                setDownloadModalOpen(true);
+                setCurrentTrack(track)
+                setDownloadModalOpen(true)
               })
               .finally(() => {
                 // Keep the completed state for a moment before clearing
@@ -727,10 +768,24 @@ export default function SpotifyConverter() {
     setZipModalOpen(true)
   }
 
-  // New function to handle downloading all tracks sequentially
+  // New function to handle downloading all tracks sequentially with automatic batching
   const handleDownloadAllTracks = async () => {
     const verifiedTracks = tracks.filter(track => track.youtubeId && track.verified)
     if (verifiedTracks.length === 0) return
+    
+    // Batch size configuration
+    const AUTO_BATCH_THRESHOLD = 100; // Auto-batch if more than 100 tracks
+    const DEFAULT_BATCH_SIZE = 50;    // Process 50 tracks per batch by default
+    
+    // If user has a lot of tracks, ask if they want auto-batching
+    if (verifiedTracks.length > AUTO_BATCH_THRESHOLD && !window.confirm(
+      `You're about to download ${verifiedTracks.length} tracks.\n\n` +
+      `To avoid browser memory issues, this will automatically create ${Math.ceil(verifiedTracks.length / DEFAULT_BATCH_SIZE)} ZIP files ` +
+      `with ${DEFAULT_BATCH_SIZE} tracks each.\n\n` +
+      `Continue with batched download?`
+    )) {
+      return; // User cancelled
+    }
     
     // Initialize batch download states
     setBatchDownloadInProgress(true)
@@ -742,137 +797,257 @@ export default function SpotifyConverter() {
     // Create an array to store downloaded file blobs
     const fileBlobs: {name: string, blob: Blob}[] = []
     
-    // Download tracks one by one
-    for (let i = 0; i < verifiedTracks.length; i++) {
-      const track = verifiedTracks[i]
-      setCurrentBatchTrackIndex(i)
+    // Determine if we need to split into multiple batches
+    const needsBatching = verifiedTracks.length > DEFAULT_BATCH_SIZE;
+    const numBatches = needsBatching ? Math.ceil(verifiedTracks.length / DEFAULT_BATCH_SIZE) : 1;
+    
+    if (needsBatching) {
+      setWarning(`Processing ${verifiedTracks.length} tracks in ${numBatches} batches to avoid memory issues.`);
+    }
+    
+    // Process tracks in batches
+    for (let batchIndex = 0; batchIndex < numBatches; batchIndex++) {
+      // Get tracks for this batch
+      const startIdx = batchIndex * DEFAULT_BATCH_SIZE;
+      const endIdx = Math.min(startIdx + DEFAULT_BATCH_SIZE, verifiedTracks.length);
+      const batchTracks = verifiedTracks.slice(startIdx, endIdx);
       
-      // Update batch progress
-      setBatchDownloadProgress(Math.round((i / verifiedTracks.length) * 100))
+      // Update batch information
+      if (numBatches > 1) {
+        console.log(`[Batch] Processing batch ${batchIndex + 1}/${numBatches}, tracks ${startIdx + 1}-${endIdx} of ${verifiedTracks.length}`);
+        setWarning(`Processing batch ${batchIndex + 1}/${numBatches}: tracks ${startIdx + 1}-${endIdx} of ${verifiedTracks.length}`);
+      }
       
-      // Skip if no YouTube ID
-      if (!track.youtubeId) continue
+      // Process each track in the current batch
+      const batchBlobs: {name: string, blob: Blob}[] = [];
       
-      // Set this track as downloading
-      setDownloadingTracks(prev => ({ ...prev, [track.id]: true }))
-      setDownloadProgress(prev => ({ ...prev, [track.id]: 0 }))
-      
-      try {
-        // Create the download URL
-        const downloadUrl = `/api/transcode?videoId=${track.youtubeId}`
-        console.log(`[Batch][${i+1}/${verifiedTracks.length}] Downloading "${track.name}"`)
+      for (let i = 0; i < batchTracks.length; i++) {
+        const track = batchTracks[i];
+        const overallIndex = startIdx + i;
+        setCurrentBatchTrackIndex(overallIndex);
         
-        // Download the track
-        let audioBlob: Blob | null = null
-        let errorMessage: string | null = null
+        // Update batch progress (relative to all tracks)
+        setBatchDownloadProgress(Math.round((overallIndex / verifiedTracks.length) * 100))
+        
+        // Skip if no YouTube ID
+        if (!track.youtubeId) continue
+        
+        // Set this track as downloading
+        setDownloadingTracks(prev => ({ ...prev, [track.id]: true }))
+        setDownloadProgress(prev => ({ ...prev, [track.id]: 0 }))
         
         try {
-          const response = await fetch(downloadUrl)
+          // First try the new API endpoint using YouTube.js
+          const downloadUrl = `/api/alt-transcode?videoId=${track.youtubeId}`;
+          console.log(`[Batch][${overallIndex+1}/${verifiedTracks.length}] Downloading "${track.name}" using alt-transcode`);
           
-          // Check if response is JSON (error)
-          const contentType = response.headers.get('content-type')
-          if (contentType && contentType.includes('application/json')) {
-            const errorData = await response.json()
-            errorMessage = errorData.message || "Download failed"
-          } else if (!response.ok) {
-            errorMessage = `Server returned status ${response.status}`
-          } else {
-            // Get the audio blob
-            audioBlob = await response.blob()
+          // Download the track
+          let audioBlob: Blob | null = null;
+          let errorMessage: string | null = null;
+          
+          try {
+            const response = await fetch(downloadUrl);
             
-            // Verify it's an audio file
-            if (!audioBlob.type || !audioBlob.type.includes('audio/')) {
-              errorMessage = "Received non-audio data"
+            // Check if response is JSON (error)
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              const errorData = await response.json();
+              errorMessage = errorData.message || "Download failed with alt-transcode";
+              console.log(`[Batch] Error from alt-transcode: ${errorMessage}, will try fallback endpoint`);
+              
+              // Try fallback endpoint
+              const fallbackUrl = `/api/transcode?videoId=${track.youtubeId}`;
+              console.log(`[Batch] Trying fallback endpoint: ${fallbackUrl}`);
+              
+              const fallbackResponse = await fetch(fallbackUrl);
+              
+              if (fallbackResponse.ok && !fallbackResponse.headers.get('content-type')?.includes('application/json')) {
+                audioBlob = await fallbackResponse.blob();
+                errorMessage = null; // Clear error message if fallback succeeds
+              } else {
+                errorMessage = "All download methods failed";
+              }
+            } else if (!response.ok) {
+              errorMessage = `Server returned status ${response.status}, trying fallback`;
+              console.log(`[Batch] ${errorMessage}`);
+              
+              // Try fallback endpoint
+              const fallbackUrl = `/api/transcode?videoId=${track.youtubeId}`;
+              const fallbackResponse = await fetch(fallbackUrl);
+              
+              if (fallbackResponse.ok && !fallbackResponse.headers.get('content-type')?.includes('application/json')) {
+                audioBlob = await fallbackResponse.blob();
+                errorMessage = null; // Clear error message if fallback succeeds
+              } else {
+                errorMessage = "All download methods failed";
+              }
+            } else {
+              // Get the audio blob from the primary endpoint
+              audioBlob = await response.blob();
+              
+              // Verify it's an audio file
+              if (!audioBlob.type || !audioBlob.type.includes('audio/')) {
+                errorMessage = "Received non-audio data";
+              }
             }
+          } catch (fetchError) {
+            errorMessage = fetchError instanceof Error ? fetchError.message : "Network error";
+            console.error(`[Batch] Fetch error: ${errorMessage}`);
           }
-        } catch (fetchError) {
-          errorMessage = fetchError instanceof Error ? fetchError.message : "Network error"
-        }
-        
-        // Handle errors or process the blob
-        if (errorMessage) {
-          console.error(`[Batch] Error for "${track.name}": ${errorMessage}`)
+          
+          // Handle errors or process the blob
+          if (errorMessage) {
+            console.error(`[Batch] Error for "${track.name}": ${errorMessage}`);
+            setDownloadErrors(prev => ({
+              ...prev,
+              [track.id]: errorMessage
+            }));
+            continue; // Skip this track and move to next
+          }
+          
+          if (!audioBlob) {
+            console.error(`[Batch] No audio blob for "${track.name}"`);
+            continue; // Skip this track if we somehow don't have a blob
+          }
+          
+          // Create filename
+          const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`;
+          
+          // Store the blob for later ZIP creation
+          batchBlobs.push({ name: sanitizedFileName, blob: audioBlob });
+          fileBlobs.push({ name: sanitizedFileName, blob: audioBlob });
+          setDownloadedFiles(prev => [...prev, { name: sanitizedFileName, blob: audioBlob }]);
+          
+          // Mark this track as complete
+          setDownloadProgress(prev => ({ ...prev, [track.id]: 100 }));
+          
+          // Small delay before processing next track to avoid overwhelming the browser
+          await new Promise(resolve => setTimeout(resolve, 300));
+        } catch (error) {
+          console.error(`[Batch] Error processing "${track.name}":`, error);
           setDownloadErrors(prev => ({
             ...prev,
-            [track.id]: errorMessage
-          }))
-          continue // Skip this track and move to next
+            [track.id]: error instanceof Error ? error.message : "Processing failed"
+          }));
+        } finally {
+          // Clear downloading state for this track
+          setDownloadingTracks(prev => ({ ...prev, [track.id]: false }));
         }
-        
-        if (!audioBlob) {
-          console.error(`[Batch] No audio blob for "${track.name}"`)
-          continue // Skip this track if we somehow don't have a blob
+      }
+      
+      // Create and download ZIP after each batch is processed (if auto-batching)
+      if (needsBatching && batchBlobs.length > 0) {
+        try {
+          console.log(`[Batch] Creating ZIP file for batch ${batchIndex + 1} with ${batchBlobs.length} tracks`);
+          
+          // Create a ZIP file for this batch
+          const JSZip = (await import('jszip')).default;
+          const zip = new JSZip();
+          
+          // Add all files from this batch to the ZIP
+          batchBlobs.forEach(file => {
+            zip.file(file.name, file.blob);
+          });
+          
+          // Generate the ZIP file with streaming optimizations
+          const zipBlob = await zip.generateAsync({ 
+            type: 'blob',
+            streamFiles: true,
+            compression: "DEFLATE",
+            compressionOptions: {
+              level: 3 // Lower compression level (1-9) to reduce memory usage
+            }
+          });
+          
+          // Create download link for the ZIP
+          const zipUrl = URL.createObjectURL(zipBlob);
+          const downloadLink = document.createElement('a');
+          downloadLink.href = zipUrl;
+          downloadLink.download = numBatches > 1 
+            ? `spotify_tracks_batch${batchIndex + 1}_of_${numBatches}.zip` 
+            : "spotify_tracks.zip";
+          downloadLink.style.display = 'none';
+          document.body.appendChild(downloadLink);
+          
+          // Click the download link
+          downloadLink.click();
+          
+          // Clean up
+          setTimeout(() => {
+            document.body.removeChild(downloadLink);
+            URL.revokeObjectURL(zipUrl);
+          }, 100);
+          
+          console.log(`[Batch] Created and downloaded ZIP file for batch ${batchIndex + 1}`);
+          
+          // If we have more batches to process, wait a bit to allow memory cleanup
+          if (batchIndex < numBatches - 1) {
+            setWarning(`Downloaded batch ${batchIndex + 1}/${numBatches}. Preparing next batch...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        } catch (zipError) {
+          console.error(`[Batch] Error creating ZIP for batch ${batchIndex + 1}:`, zipError);
+          setError(`Error creating ZIP for batch ${batchIndex + 1}: ${zipError instanceof Error ? zipError.message : String(zipError)}`);
         }
-        
-        // Create filename
-        const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`
-        
-        // Store the blob for later ZIP creation
-        fileBlobs.push({ name: sanitizedFileName, blob: audioBlob })
-        setDownloadedFiles(prev => [...prev, { name: sanitizedFileName, blob: audioBlob }])
-        
-        // Mark this track as complete
-        setDownloadProgress(prev => ({ ...prev, [track.id]: 100 }))
-        
-        // Small delay before processing next track
-        await new Promise(resolve => setTimeout(resolve, 500))
-      } catch (error) {
-        console.error(`[Batch] Error processing "${track.name}":`, error)
-        setDownloadErrors(prev => ({
-          ...prev,
-          [track.id]: error instanceof Error ? error.message : "Processing failed"
-        }))
-      } finally {
-        // Clear downloading state for this track
-        setDownloadingTracks(prev => ({ ...prev, [track.id]: false }))
       }
     }
     
-    // Create and download ZIP after all tracks are processed
-    setBatchDownloadProgress(100)
-    
-    if (fileBlobs.length > 0) {
+    // Create a final ZIP only if we didn't do batch-by-batch ZIPs and we have files
+    if (!needsBatching && fileBlobs.length > 0) {
       try {
-        const JSZip = (await import('jszip')).default
-        const zip = new JSZip()
+        console.log(`[Batch] Creating ZIP file for ${fileBlobs.length} tracks`);
+        setBatchDownloadProgress(100);
+        
+        // Create a single ZIP file
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
         
         // Add all files to the ZIP
         fileBlobs.forEach(file => {
-          zip.file(file.name, file.blob)
-        })
+          zip.file(file.name, file.blob);
+        });
         
-        // Generate the ZIP file
-        const zipBlob = await zip.generateAsync({ type: 'blob' })
+        // Generate the ZIP file with streaming optimizations
+        const zipBlob = await zip.generateAsync({ 
+          type: 'blob',
+          streamFiles: true,
+          compression: "DEFLATE",
+          compressionOptions: {
+            level: 5
+          }
+        });
         
         // Create download link for the ZIP
-        const zipUrl = URL.createObjectURL(zipBlob)
-        const downloadLink = document.createElement('a')
-        downloadLink.href = zipUrl
-        downloadLink.download = "spotify_tracks.zip"
-        downloadLink.style.display = 'none'
-        document.body.appendChild(downloadLink)
+        const zipUrl = URL.createObjectURL(zipBlob);
+        const downloadLink = document.createElement('a');
+        downloadLink.href = zipUrl;
+        downloadLink.download = "spotify_tracks.zip";
+        downloadLink.style.display = 'none';
+        document.body.appendChild(downloadLink);
         
         // Click the download link
-        downloadLink.click()
+        downloadLink.click();
         
         // Clean up
         setTimeout(() => {
-          document.body.removeChild(downloadLink)
-          URL.revokeObjectURL(zipUrl)
-        }, 100)
+          document.body.removeChild(downloadLink);
+          URL.revokeObjectURL(zipUrl);
+        }, 100);
         
-        console.log(`[Batch] ZIP file created with ${fileBlobs.length} tracks`)
+        console.log(`[Batch] Created and downloaded ZIP file with ${fileBlobs.length} tracks`);
       } catch (error) {
-        console.error(`[Batch] Error creating ZIP file:`, error)
-        setError(`Error creating ZIP file: ${error instanceof Error ? error.message : String(error)}`)
+        console.error(`[Batch] Error creating ZIP file:`, error);
+        setError(`Error creating ZIP file: ${error instanceof Error ? error.message : String(error)}. Try downloading fewer tracks at once.`);
       }
     }
-    
+
     // Reset batch download state
     setTimeout(() => {
-      setBatchDownloadInProgress(false)
-      setWarning(`Downloaded ${fileBlobs.length} out of ${verifiedTracks.length} tracks`)
-    }, 2000)
+      setBatchDownloadInProgress(false);
+      setWarning(`Downloaded ${fileBlobs.length} out of ${verifiedTracks.length} tracks${
+        numBatches > 1 ? ` in ${numBatches} batches` : ''
+      }`);
+    }, 2000);
   }
 
   // Test the s-ytdl library
