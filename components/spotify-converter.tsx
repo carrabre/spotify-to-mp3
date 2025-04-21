@@ -370,6 +370,22 @@ export default function SpotifyConverter() {
     }
   }
 
+  // Create a helper function to safely format filenames while preserving original names
+  const createSafeFilename = (track: Track): string => {
+    // Only replace characters that are illegal in filenames
+    // Windows/macOS/Linux illegal filename chars: / \ : * ? " < > |
+    const sanitizeName = (name: string) => name
+      .replace(/[/\\:*?"<>|]/g, '-') // Replace illegal chars with dashes
+      .replace(/\s+/g, ' ')          // Normalize whitespace
+      .trim();
+    
+    const trackName = sanitizeName(track.name);
+    const artistName = track.artists.map(artist => sanitizeName(artist)).join(', ');
+    
+    // Format: Artist - Track.mp3
+    return `${artistName} - ${trackName}.mp3`;
+  };
+
   // Modify the handleDownloadTrack function to add more logging and error handling
   // Modify the handleDownloadTrack function to wait until progress reaches 100%
   const handleDownloadTrack = async (track: Track) => {
@@ -556,17 +572,17 @@ export default function SpotifyConverter() {
                 
                 // Create a blob URL and trigger download
                 const blobUrl = URL.createObjectURL(blob)
-                const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`
+                const fileName = createSafeFilename(track);
                 
                 // Create a download link
                 const downloadLink = document.createElement('a')
                 downloadLink.href = blobUrl
-                downloadLink.download = sanitizedFileName
+                downloadLink.download = fileName
                 downloadLink.style.display = 'none'
                 document.body.appendChild(downloadLink)
                 
                 // Click the download link
-                console.log(`[Client][${downloadId}] Triggering download for ${sanitizedFileName}`)
+                console.log(`[Client][${downloadId}] Triggering download for ${fileName}`)
                 downloadLink.click()
                 
                 // Clean up
@@ -704,17 +720,17 @@ export default function SpotifyConverter() {
               
               // Create a blob URL and trigger download
               const blobUrl = URL.createObjectURL(blob);
-              const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`;
+              const fileName = createSafeFilename(track);
               
               // Create a download link
               const downloadLink = document.createElement('a');
               downloadLink.href = blobUrl;
-              downloadLink.download = sanitizedFileName;
+              downloadLink.download = fileName;
               downloadLink.style.display = 'none';
               document.body.appendChild(downloadLink);
               
               // Click the download link
-              console.log(`[Client][${downloadId}] Triggering retry download for ${sanitizedFileName}`);
+              console.log(`[Client][${downloadId}] Triggering retry download for ${fileName}`);
               downloadLink.click();
               
               // Clean up
@@ -911,12 +927,12 @@ export default function SpotifyConverter() {
           }
           
           // Create filename
-          const sanitizedFileName = `${track.name.replace(/[^a-z0-9]/gi, "_")}_${track.artists.join("_").replace(/[^a-z0-9]/gi, "_")}.mp3`;
+          const fileName = createSafeFilename(track);
           
           // Store the blob for later ZIP creation
-          batchBlobs.push({ name: sanitizedFileName, blob: audioBlob });
-          fileBlobs.push({ name: sanitizedFileName, blob: audioBlob });
-          setDownloadedFiles(prev => [...prev, { name: sanitizedFileName, blob: audioBlob }]);
+          batchBlobs.push({ name: fileName, blob: audioBlob });
+          fileBlobs.push({ name: fileName, blob: audioBlob });
+          setDownloadedFiles(prev => [...prev, { name: fileName, blob: audioBlob }]);
           
           // Mark this track as complete
           setDownloadProgress(prev => ({ ...prev, [track.id]: 100 }));
