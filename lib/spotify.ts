@@ -139,7 +139,7 @@ function extractSpotifyId(url: string): { type: "track" | "album" | "playlist"; 
 }
 
 // Fetch track data
-async function fetchTrack(id: string, token: string): Promise<Track[]> {
+async function fetchTrack(id: string, token: string): Promise<{ tracks: Track[], sourceName: string }> {
   const response = await fetch(`https://api.spotify.com/v1/tracks/${id}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -149,11 +149,14 @@ async function fetchTrack(id: string, token: string): Promise<Track[]> {
   }
 
   const track: SpotifyTrack = await response.json()
-  return [convertSpotifyTrack(track)]
+  return { 
+    tracks: [convertSpotifyTrack(track)],
+    sourceName: `${track.artists.map(a => a.name).join(", ")} - ${track.name}`
+  }
 }
 
 // Fetch album data with pagination
-async function fetchAlbum(id: string, token: string): Promise<Track[]> {
+async function fetchAlbum(id: string, token: string): Promise<{ tracks: Track[], sourceName: string }> {
   const albumResponse = await fetch(`https://api.spotify.com/v1/albums/${id}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -184,21 +187,24 @@ async function fetchAlbum(id: string, token: string): Promise<Track[]> {
     nextUrl = tracksData.next
   }
 
-  return tracks.map((track) => {
-    // Album tracks don't include album info, so we need to add it
-    const trackWithAlbum = {
-      ...track,
-      album: {
-        name: album.name,
-        images: album.images || [],
-      },
-    }
-    return convertSpotifyTrack(trackWithAlbum)
-  })
+  return {
+    tracks: tracks.map((track) => {
+      // Album tracks don't include album info, so we need to add it
+      const trackWithAlbum = {
+        ...track,
+        album: {
+          name: album.name,
+          images: album.images || [],
+        },
+      }
+      return convertSpotifyTrack(trackWithAlbum)
+    }),
+    sourceName: album.name
+  }
 }
 
 // Fetch playlist data with pagination
-async function fetchPlaylist(id: string, token: string): Promise<Track[]> {
+async function fetchPlaylist(id: string, token: string): Promise<{ tracks: Track[], sourceName: string }> {
   const playlistResponse = await fetch(`https://api.spotify.com/v1/playlists/${id}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -229,13 +235,16 @@ async function fetchPlaylist(id: string, token: string): Promise<Track[]> {
     nextUrl = tracksData.next
   }
 
-  return trackItems
-    .filter((item) => item.track) // Filter out null tracks
-    .map((item) => convertSpotifyTrack(item.track))
+  return {
+    tracks: trackItems
+      .filter((item) => item.track) // Filter out null tracks
+      .map((item) => convertSpotifyTrack(item.track)),
+    sourceName: playlist.name
+  }
 }
 
 // Main function to fetch Spotify data
-export async function fetchSpotifyData(url: string): Promise<Track[]> {
+export async function fetchSpotifyData(url: string): Promise<{ tracks: Track[], sourceName: string }> {
   try {
     const { type, id } = extractSpotifyId(url)
     const token = await getSpotifyToken()

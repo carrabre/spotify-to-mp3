@@ -40,6 +40,7 @@ export interface SpotifyTrack {
 }
 
 export interface SpotifyPlaylist {
+  name: string
   tracks: {
     items: {
       track: SpotifyTrack

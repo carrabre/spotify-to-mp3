@@ -99,13 +99,13 @@ export async function POST(request: NextRequest) {
   logMemoryUsage(`[${requestId}] Start of request`);
   
   try {
-    const data = await request.json()
-    const { tracks, batchSize: requestedBatchSize } = data
-
-    console.log(`[ZIP-${requestId}] Received request for ${tracks?.length || 0} tracks`);
-
-    if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
-      return NextResponse.json({ error: "No tracks provided" }, { status: 400 })
+    const { tracks, name } = await request.json();
+    
+    if (!Array.isArray(tracks) || tracks.length === 0) {
+      return NextResponse.json(
+        { error: "No valid tracks provided" },
+        { status: 400 }
+      );
     }
 
     // Check if we're running on Vercel - provide external download options if so
@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
 
     // Determine if we need to process in batches (for large playlists)
     const batchSize = Math.min(
-      requestedBatchSize || MAX_TRACKS_PER_BATCH, 
+      tracks.length, 
       MAX_TRACKS_PER_BATCH
     )
     
@@ -130,13 +130,13 @@ export async function POST(request: NextRequest) {
     if (tracks.length > 200) {
       console.log(`[ZIP-${requestId}] Large playlist detected with ${tracks.length} tracks. Recommending client-side batching.`)
       
-      if (!requestedBatchSize) {
+      if (batchSize !== tracks.length) {
         return NextResponse.json({
           error: "Playlist too large for single download",
           message: "This playlist is too large to download at once. Please download in smaller batches.",
           recommendation: "Split the playlist into smaller batches",
           trackCount: tracks.length,
-          recommendedBatchSize: MAX_TRACKS_PER_BATCH,
+          recommendedBatchSize: batchSize,
           code: "PLAYLIST_TOO_LARGE"
         }, { status: 413 }) // 413 Payload Too Large
       }
@@ -332,9 +332,14 @@ export async function POST(request: NextRequest) {
     const zipSizeMB = Math.round(zipBuffer.length / 1024 / 1024);
     console.log(`[ZIP-${requestId}] ZIP file generated in ${zipGenerationTime.pretty}. Size: ${zipSizeMB}MB`);
 
+    // Use the provided name for the ZIP file, or a default
+    const zipFileName = name 
+      ? `${name.replace(/[^a-z0-9]/gi, "_")}.zip`
+      : "spotify_tracks.zip";
+
     // Set headers for file download
     const headers = new Headers();
-    headers.set("Content-Disposition", `attachment; filename="spotify-tracks.zip"`);
+    headers.set("Content-Disposition", `attachment; filename="${zipFileName}"`);
     headers.set("Content-Type", "application/zip");
     headers.set("Content-Length", zipBuffer.length.toString());
 
@@ -353,17 +358,10 @@ export async function POST(request: NextRequest) {
       console.log(`[ZIP-${requestId}] Batch info: ${batchInfo}`);
     }
 
-    // Convert buffer to stream
-    const readable = new Readable();
-    readable.push(zipBuffer);
-    readable.push(null);
-    const readableStream = Readable.toWeb(readable) as ReadableStream;
-
     logMemoryUsage(`[${requestId}] Before sending response`);
     console.log(`[ZIP-${requestId}] Total request processing time: ${timer.getElapsedTime().pretty}`);
 
-    return new NextResponse(readableStream, {
-      status: 200,
+    return new NextResponse(zipBuffer, {
       headers,
     });
   } catch (error) {

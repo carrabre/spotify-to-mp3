@@ -5,41 +5,47 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Download, Loader2, CheckCircle2, AlertCircle, X } from "lucide-react"
+import { Download, Loader2, CheckCircle2, AlertCircle, X, AlertTriangle, CheckCircle, Clock, ExternalLink } from "lucide-react"
 import type { Track } from "@/lib/types"
 
 interface ZipDownloadModalProps {
   isOpen: boolean
   onClose: () => void
   tracks: Track[]
+  sourceName?: string
 }
 
-export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloadModalProps) {
-  const [isDownloading, setIsDownloading] = useState(false)
+export default function ZipDownloadModal({ isOpen, onClose, tracks, sourceName = "" }: ZipDownloadModalProps) {
+  const [status, setStatus] = useState<"initial" | "downloading" | "complete" | "error">("initial")
   const [progress, setProgress] = useState(0)
-  const [currentTrack, setCurrentTrack] = useState<string | null>(null)
   const [processedCount, setProcessedCount] = useState(0)
-  const [status, setStatus] = useState<"idle" | "downloading" | "complete" | "error">("idle")
+  const [currentTrack, setCurrentTrack] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string | null>(null)
+  const [isDownloading, setIsDownloading] = useState(false)
   const [startTime, setStartTime] = useState<number | null>(null)
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string | null>(null)
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
-      setIsDownloading(false)
+      setStatus("initial")
       setProgress(0)
-      setCurrentTrack(null)
       setProcessedCount(0)
-      setStatus("idle")
+      setCurrentTrack(null)
       setError(null)
-      setEstimatedTimeRemaining(null)
+      setIsDownloading(false)
       setStartTime(null)
+      setEstimatedTimeRemaining(null)
     }
   }, [isOpen])
 
-  // Filter out tracks without YouTube IDs
+  // Filter out tracks that don't have YouTube IDs
   const downloadableTracks = tracks.filter((track) => track.youtubeId && track.verified)
+
+  // Create a safe filename based on source name
+  const safeSourceName = sourceName 
+    ? sourceName.replace(/[/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim() 
+    : "spotify_tracks";
 
   // Download tracks individually in sequence
   const downloadTracksSequentially = async () => {
@@ -120,92 +126,104 @@ export default function ZipDownloadModal({ isOpen, onClose, tracks }: ZipDownloa
           <DialogTitle className="text-lg">Download All Tracks ({downloadableTracks.length})</DialogTitle>
         </DialogHeader>
 
-        <div className="mt-4 space-y-4">
-          {status === "idle" && (
-            <>
-              <Alert>
-                <AlertDescription>
-                  This will download all {downloadableTracks.length} verified tracks individually. Each track will open
-                  in a new tab.
-                </AlertDescription>
-              </Alert>
+        <div className="space-y-4 py-4">
+          {status === "initial" && (
+            <div className="space-y-4">
+              <p>You have {downloadableTracks.length} tracks available for download.</p>
 
-              <Button
-                onClick={downloadTracksSequentially}
-                disabled={isDownloading || downloadableTracks.length === 0}
-                className="w-full"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Download All Tracks
-              </Button>
-            </>
+              {downloadableTracks.length > 5 && (
+                <div className="flex items-start gap-2 text-amber-600 bg-amber-50 p-3 rounded-md">
+                  <AlertTriangle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Download may take some time</p>
+                    <p className="text-sm">
+                      You're downloading {downloadableTracks.length} tracks. This might take a while and could trigger browser security warnings.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2">
+                <Button
+                  onClick={downloadTracksSequentially}
+                  disabled={downloadableTracks.length === 0}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download {downloadableTracks.length} Tracks Sequentially
+                </Button>
+
+                <Button
+                  variant="outline"
+                  asChild
+                >
+                  <a
+                    href={`/api/zip-download?tracks=${encodeURIComponent(JSON.stringify(downloadableTracks))}&name=${encodeURIComponent(safeSourceName)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    Download as ZIP (Server-Side)
+                  </a>
+                </Button>
+              </div>
+            </div>
           )}
 
           {status === "downloading" && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h3 className="font-medium">Downloading tracks...</h3>
-                  <p className="text-sm text-gray-500">
-                    {processedCount} of {downloadableTracks.length} tracks processed
-                  </p>
-                </div>
-                <Button variant="ghost" size="sm" onClick={onClose} disabled={isDownloading}>
-                  <X className="h-4 w-4" />
-                </Button>
+              <div className="flex justify-between text-sm text-gray-600 mb-2">
+                <span>
+                  {processedCount} of {downloadableTracks.length} tracks processed
+                </span>
+                <span>{progress}%</span>
               </div>
 
               <Progress value={progress} className="h-2" />
 
               {currentTrack && (
-                <p className="text-sm text-gray-600 flex items-center">
-                  <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                  Processing: {currentTrack}
-                </p>
+                <div className="text-sm text-gray-600">
+                  Currently downloading: {currentTrack}
+                </div>
               )}
 
               {estimatedTimeRemaining && (
-                <p className="text-xs text-gray-500">Estimated time remaining: {estimatedTimeRemaining}</p>
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <Clock className="h-4 w-4" />
+                  Estimated time remaining: {estimatedTimeRemaining}
+                </div>
               )}
 
-              <Alert>
-                <AlertDescription>
-                  Please allow pop-ups in your browser. Each track will open in a new tab.
-                </AlertDescription>
-              </Alert>
+              <Button variant="outline" onClick={() => setIsDownloading(false)} disabled={!isDownloading}>
+                Cancel
+              </Button>
             </div>
           )}
 
           {status === "complete" && (
             <div className="space-y-4">
-              <Alert variant="success" className="bg-green-50 text-green-800 border-green-200">
-                <CheckCircle2 className="h-4 w-4" />
-                <AlertDescription>All download processes have been initiated!</AlertDescription>
-              </Alert>
-
-              <div className="flex justify-end">
-                <Button variant="outline" onClick={onClose}>
-                  Close
-                </Button>
+              <div className="flex items-start gap-2 text-green-600 bg-green-50 p-3 rounded-md">
+                <CheckCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">Download Complete</p>
+                  <p className="text-sm">All tracks have been processed. Check your downloads folder.</p>
+                </div>
               </div>
+
+              <Button onClick={onClose}>Close</Button>
             </div>
           )}
 
-          {status === "error" && (
+          {status === "error" && error && (
             <div className="space-y-4">
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  {error || "Failed to download tracks. Please try downloading them individually."}
-                </AlertDescription>
-              </Alert>
-
-              <div className="flex justify-between">
-                <Button variant="outline" onClick={onClose}>
-                  Close
-                </Button>
-                <Button onClick={downloadTracksSequentially}>Try Again</Button>
+              <div className="flex items-start gap-2 text-red-600 bg-red-50 p-3 rounded-md">
+                <AlertTriangle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">Error</p>
+                  <p className="text-sm">{error}</p>
+                </div>
               </div>
+
+              <Button onClick={onClose}>Close</Button>
             </div>
           )}
         </div>

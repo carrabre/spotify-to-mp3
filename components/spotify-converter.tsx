@@ -35,6 +35,7 @@ export default function SpotifyConverter() {
   const [downloadingTracks, setDownloadingTracks] = useState<Record<string, boolean>>({})
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({})
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({})
+  const [sourceName, setSourceName] = useState<string>("")
 
   // YouTube search modal state
   const [searchModalOpen, setSearchModalOpen] = useState(false)
@@ -78,9 +79,12 @@ export default function SpotifyConverter() {
       // Fetch tracks via our new server-side API (no client credentials required)
       const response = await fetch(`/api/spotify?url=${encodeURIComponent(spotifyUrl)}`)
       if (!response.ok) throw new Error(`Spotify API returned status ${response.status}`)
-      const spotifyTracks = await response.json()
+      const spotifyData = await response.json()
+      const spotifyTracks = spotifyData.tracks
+      const name = spotifyData.sourceName
 
-      setProcessingStatus(`Found ${spotifyTracks.length} tracks. Preparing for verification...`)
+      setProcessingStatus(`Found ${spotifyTracks.length} tracks from "${name}". Preparing for verification...`)
+      setSourceName(name)
 
       // Initialize tracks without YouTube matches
       const initialTracks = spotifyTracks.map((track: any) => ({
@@ -1029,6 +1033,11 @@ export default function SpotifyConverter() {
       setWarning(`Processing ${verifiedTracks.length} tracks in ${numBatches} batches to avoid memory issues.`);
     }
     
+    // Create a safe filename based on source name
+    const safeSourceName = sourceName 
+      ? sourceName.replace(/[/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim() 
+      : "spotify_tracks";
+    
     // Process tracks in batches
     for (let batchIndex = 0; batchIndex < numBatches; batchIndex++) {
       // Get tracks for this batch
@@ -1197,8 +1206,8 @@ export default function SpotifyConverter() {
           const downloadLink = document.createElement('a');
           downloadLink.href = zipUrl;
           downloadLink.download = numBatches > 1 
-            ? `spotify_tracks_batch${batchIndex + 1}_of_${numBatches}.zip` 
-            : "spotify_tracks.zip";
+            ? `${safeSourceName}_batch${batchIndex + 1}_of_${numBatches}.zip` 
+            : `${safeSourceName}.zip`;
           downloadLink.style.display = 'none';
           document.body.appendChild(downloadLink);
           
@@ -1254,7 +1263,7 @@ export default function SpotifyConverter() {
         const zipUrl = URL.createObjectURL(zipBlob);
         const downloadLink = document.createElement('a');
         downloadLink.href = zipUrl;
-        downloadLink.download = "spotify_tracks.zip";
+        downloadLink.download = `${safeSourceName}.zip`;
         downloadLink.style.display = 'none';
         document.body.appendChild(downloadLink);
         
@@ -1455,7 +1464,7 @@ export default function SpotifyConverter() {
       )}
 
       {/* ZIP Download Modal */}
-      <ZipDownloadModal isOpen={zipModalOpen} onClose={() => setZipModalOpen(false)} tracks={tracks} />
+      <ZipDownloadModal isOpen={zipModalOpen} onClose={() => setZipModalOpen(false)} tracks={tracks} sourceName={sourceName} />
     </div>
   )
 }

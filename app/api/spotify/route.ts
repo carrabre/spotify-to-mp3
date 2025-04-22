@@ -25,40 +25,18 @@ export async function GET(request: NextRequest) {
       .filter(key => key.startsWith('SPOTIFY') || key.startsWith('NEXT'))
     console.log("Available environment variables:", envVarKeys.join(", "));
 
-    const tracks = await fetchSpotifyData(url)
-    return NextResponse.json(tracks)
+    const result = await fetchSpotifyData(url)
+    return NextResponse.json(result)
   } catch (error) {
     console.error("Error in Spotify API route:", error)
     
-    // More detailed error response
-    let statusCode = 500
-    let errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
-    let userMessage = errorMessage
-    
-    // More specific error codes for different types of errors
-    if (errorMessage.includes("credentials are not configured")) {
-      statusCode = 503 // Service Unavailable
-      errorMessage = "Spotify API credentials are misconfigured. Please check server environment variables."
-      userMessage = "Spotify API credentials are misconfigured. Please add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to your Vercel environment variables."
-    } else if (errorMessage.includes("Invalid Spotify URL")) {
-      statusCode = 400 // Bad Request
-    } else if (errorMessage.includes("Failed to fetch")) {
-      statusCode = 502 // Bad Gateway
-    }
-    
+    // Return detailed error information for debugging
     return NextResponse.json(
       { 
-        error: userMessage,
-        technicalDetails: errorMessage,
-        type: error instanceof Error ? error.constructor.name : "Unknown",
-        // Include a timestamp for debugging
-        timestamp: new Date().toISOString(),
-        // Include help text for credential errors
-        helpText: statusCode === 503 ? 
-          "This is a server configuration issue. Make sure to set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your Vercel project settings under Environment Variables. You can get these from the Spotify Developer Dashboard." : 
-          undefined
+        error: error instanceof Error ? error.message : "An unknown error occurred",
+        stack: error instanceof Error ? error.stack : undefined
       },
-      { status: statusCode }
+      { status: 500 }
     )
   }
 } 
