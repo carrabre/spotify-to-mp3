@@ -482,6 +482,17 @@ export default function SpotifyConverter() {
         return audioBlob; // Return original blob if no album art
       }
       
+      // Validate that we have a Spotify album cover
+      if (!track.albumImageUrl.includes('scdn.co') && !track.albumImageUrl.includes('spotify.com')) {
+        console.error(`[AlbumArt] Not using a Spotify album URL: ${track.albumImageUrl}`);
+        // Try to get a Spotify URL if possible
+        if (track.youtubeThumbnail && track.albumImageUrl === track.youtubeThumbnail) {
+          console.error(`[AlbumArt] Image URL is from YouTube, not Spotify`);
+          return audioBlob; // Skip embedding as we need a Spotify image
+        }
+        return audioBlob; // Skip embedding with non-Spotify images
+      }
+      
       console.log(`[AlbumArt] Using API to embed album artwork for "${track.name}"`);
       console.log(`[AlbumArt] Album image URL: ${track.albumImageUrl}`);
       
