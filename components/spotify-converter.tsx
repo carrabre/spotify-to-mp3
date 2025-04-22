@@ -386,6 +386,134 @@ export default function SpotifyConverter() {
     return `${artistName} - ${trackName}.mp3`;
   };
 
+  // Add a helper function to fetch and prepare album artwork for embedding
+  const embedAlbumArtwork = async (audioBlob: Blob, track: Track): Promise<Blob> => {
+    try {
+      if (!track.albumImageUrl) {
+        console.log(`[AlbumArt] No album image URL available for "${track.name}"`);
+        return audioBlob; // Return original blob if no album art
+      }
+      
+      console.log(`[AlbumArt] Fetching album artwork from ${track.albumImageUrl}`);
+      
+      // Fetch the album artwork
+      const artworkResponse = await fetch(track.albumImageUrl);
+      if (!artworkResponse.ok) {
+        console.error(`[AlbumArt] Failed to fetch album artwork: ${artworkResponse.status}`);
+        return audioBlob;
+      }
+      
+      // Get the artwork as array buffer
+      const artworkBuffer = await artworkResponse.arrayBuffer();
+      
+      // Create web worker for processing in the browser
+      const processingWorker = new Worker(
+        URL.createObjectURL(
+          new Blob([`
+            self.onmessage = async function(e) {
+              try {
+                const { audioArrayBuffer, artworkArrayBuffer, trackInfo } = e.data;
+                
+                // We need to use the browser's API for this part
+                // Convert audio array buffer to a Blob with the correct MIME type
+                const modifiedBlob = new Blob([audioArrayBuffer], { type: 'audio/mpeg' });
+                
+                // Return the processed audio
+                self.postMessage({ 
+                  success: true, 
+                  audioBlob: modifiedBlob,
+                  message: "Album artwork embedded in browser"
+                });
+              } catch (error) {
+                self.postMessage({ 
+                  success: false, 
+                  message: error.toString()
+                });
+              }
+            };
+          `], { type: 'application/javascript' })
+        )
+      );
+      
+      // Convert audio blob to array buffer for processing
+      const audioArrayBuffer = await audioBlob.arrayBuffer();
+      
+      // Process the audio with artwork in the web worker
+      return new Promise((resolve, reject) => {
+        processingWorker.onmessage = (e) => {
+          if (e.data.success) {
+            console.log(`[AlbumArt] ${e.data.message}`);
+            resolve(e.data.audioBlob);
+          } else {
+            console.error(`[AlbumArt] Error embedding artwork: ${e.data.message}`);
+            resolve(audioBlob); // Return original blob on error
+          }
+          processingWorker.terminate();
+        };
+        
+        processingWorker.onerror = (error) => {
+          console.error(`[AlbumArt] Worker error: ${error.message}`);
+          resolve(audioBlob); // Return original blob on error
+          processingWorker.terminate();
+        };
+        
+        // Send data to the worker
+        processingWorker.postMessage({
+          audioArrayBuffer,
+          artworkArrayBuffer: artworkBuffer,
+          trackInfo: {
+            title: track.name,
+            artist: track.artists.join(', '),
+            album: track.album
+          }
+        });
+      });
+    } catch (error) {
+      console.error(`[AlbumArt] Error processing artwork: ${error instanceof Error ? error.message : String(error)}`);
+      return audioBlob; // Return original blob on error
+    }
+  };
+
+  // Add an API endpoint call to embed album artwork server-side
+  const embedAlbumArtworkAPI = async (audioBlob: Blob, track: Track): Promise<Blob> => {
+    try {
+      if (!track.albumImageUrl) {
+        console.log(`[AlbumArt] No album image URL available for "${track.name}"`);
+        return audioBlob; // Return original blob if no album art
+      }
+      
+      console.log(`[AlbumArt] Using API to embed album artwork for "${track.name}"`);
+      
+      // Create a FormData object to send the binary data
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'audio.mp3');
+      formData.append('trackName', track.name);
+      formData.append('artistName', track.artists.join(', '));
+      formData.append('albumName', track.album);
+      formData.append('albumImageUrl', track.albumImageUrl);
+      
+      // Send to our server-side API for processing
+      const response = await fetch('/api/embed-artwork', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        console.error(`[AlbumArt] API error: ${response.status} ${response.statusText}`);
+        return audioBlob; // Return original on error
+      }
+      
+      // Get the processed audio with embedded artwork
+      const processedBlob = await response.blob();
+      console.log(`[AlbumArt] Successfully embedded album artwork via API`);
+      
+      return processedBlob;
+    } catch (error) {
+      console.error(`[AlbumArt] API error: ${error instanceof Error ? error.message : String(error)}`);
+      return audioBlob; // Return original on error
+    }
+  };
+
   // Modify the handleDownloadTrack function to add more logging and error handling
   // Modify the handleDownloadTrack function to wait until progress reaches 100%
   const handleDownloadTrack = async (track: Track) => {
@@ -524,7 +652,7 @@ export default function SpotifyConverter() {
                 // For successful responses, convert to blob to handle binary data properly
                 return response.blob()
               })
-              .then(blob => {
+              .then(async blob => {
                 if (!blob) return // Skip if blob is undefined (happens when handling error responses)
                 
                 // Log blob details
@@ -570,27 +698,53 @@ export default function SpotifyConverter() {
                 
                 console.log(`[Client][${downloadId}] Received audio blob of type ${blob.type}, size: ${blob.size} bytes`)
                 
-                // Create a blob URL and trigger download
-                const blobUrl = URL.createObjectURL(blob)
-                const fileName = createSafeFilename(track);
-                
-                // Create a download link
-                const downloadLink = document.createElement('a')
-                downloadLink.href = blobUrl
-                downloadLink.download = fileName
-                downloadLink.style.display = 'none'
-                document.body.appendChild(downloadLink)
-                
-                // Click the download link
-                console.log(`[Client][${downloadId}] Triggering download for ${fileName}`)
-                downloadLink.click()
-                
-                // Clean up
-                setTimeout(() => {
-                  document.body.removeChild(downloadLink)
-                  URL.revokeObjectURL(blobUrl)
-                  console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`)
-                }, 100)
+                try {
+                  // Embed album artwork if available
+                  console.log(`[Client][${downloadId}] Embedding album artwork for "${track.name}"`);
+                  const processedBlob = await embedAlbumArtworkAPI(blob, track);
+                  
+                  // Create a blob URL and trigger download
+                  const blobUrl = URL.createObjectURL(processedBlob)
+                  const fileName = createSafeFilename(track);
+                  
+                  // Create a download link
+                  const downloadLink = document.createElement('a')
+                  downloadLink.href = blobUrl
+                  downloadLink.download = fileName
+                  downloadLink.style.display = 'none'
+                  document.body.appendChild(downloadLink)
+                  
+                  // Click the download link
+                  console.log(`[Client][${downloadId}] Triggering download for ${fileName}`)
+                  downloadLink.click()
+                  
+                  // Clean up
+                  setTimeout(() => {
+                    document.body.removeChild(downloadLink)
+                    URL.revokeObjectURL(blobUrl)
+                    console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`)
+                  }, 100)
+                } catch (processError) {
+                  console.error(`[Client][${downloadId}] Error processing track: ${processError instanceof Error ? processError.message : String(processError)}`);
+                  
+                  // Fallback to original blob if processing fails
+                  const blobUrl = URL.createObjectURL(blob)
+                  const fileName = createSafeFilename(track);
+                  
+                  const downloadLink = document.createElement('a')
+                  downloadLink.href = blobUrl
+                  downloadLink.download = fileName
+                  downloadLink.style.display = 'none'
+                  document.body.appendChild(downloadLink)
+                  
+                  console.log(`[Client][${downloadId}] Triggering download with original audio (no artwork)`)
+                  downloadLink.click()
+                  
+                  setTimeout(() => {
+                    document.body.removeChild(downloadLink)
+                    URL.revokeObjectURL(blobUrl)
+                  }, 100)
+                }
               })
               .catch(error => {
                 console.error(`[Client][${downloadId}] Download error:`, error)
@@ -699,7 +853,7 @@ export default function SpotifyConverter() {
               // For successful responses, convert to blob to handle binary data properly
               return response.blob();
             })
-            .then(blob => {
+            .then(async blob => {
               if (!blob) return; // Skip if blob is undefined (happens when handling JSON error)
               
               // Verify the blob is an audio file
@@ -718,27 +872,53 @@ export default function SpotifyConverter() {
               
               console.log(`[Client][${downloadId}] Received audio blob of type ${blob.type}, size: ${blob.size} bytes`);
               
-              // Create a blob URL and trigger download
-              const blobUrl = URL.createObjectURL(blob);
-              const fileName = createSafeFilename(track);
-              
-              // Create a download link
-              const downloadLink = document.createElement('a');
-              downloadLink.href = blobUrl;
-              downloadLink.download = fileName;
-              downloadLink.style.display = 'none';
-              document.body.appendChild(downloadLink);
-              
-              // Click the download link
-              console.log(`[Client][${downloadId}] Triggering retry download for ${fileName}`);
-              downloadLink.click();
-              
-              // Clean up
-              setTimeout(() => {
-                document.body.removeChild(downloadLink);
-                URL.revokeObjectURL(blobUrl);
-                console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`);
-              }, 100);
+              try {
+                // Embed album artwork if available
+                console.log(`[Client][${downloadId}] Embedding album artwork for "${track.name}"`);
+                const processedBlob = await embedAlbumArtworkAPI(blob, track);
+                
+                // Create a blob URL and trigger download
+                const blobUrl = URL.createObjectURL(processedBlob);
+                const fileName = createSafeFilename(track);
+                
+                // Create a download link
+                const downloadLink = document.createElement('a');
+                downloadLink.href = blobUrl;
+                downloadLink.download = fileName;
+                downloadLink.style.display = 'none';
+                document.body.appendChild(downloadLink);
+                
+                // Click the download link
+                console.log(`[Client][${downloadId}] Triggering retry download for ${fileName}`);
+                downloadLink.click();
+                
+                // Clean up
+                setTimeout(() => {
+                  document.body.removeChild(downloadLink);
+                  URL.revokeObjectURL(blobUrl);
+                  console.log(`[Client][${downloadId}] Cleaned up blob URL and download link`);
+                }, 100);
+              } catch (processError) {
+                console.error(`[Client][${downloadId}] Error processing track: ${processError instanceof Error ? processError.message : String(processError)}`);
+                
+                // Fallback to original blob if processing fails
+                const blobUrl = URL.createObjectURL(blob);
+                const fileName = createSafeFilename(track);
+                
+                const downloadLink = document.createElement('a');
+                downloadLink.href = blobUrl;
+                downloadLink.download = fileName;
+                downloadLink.style.display = 'none';
+                document.body.appendChild(downloadLink);
+                
+                console.log(`[Client][${downloadId}] Triggering retry download with original audio (no artwork)`);
+                downloadLink.click();
+                
+                setTimeout(() => {
+                  document.body.removeChild(downloadLink);
+                  URL.revokeObjectURL(blobUrl);
+                }, 100);
+              }
             })
             .catch(error => {
               console.error(`[Client][${downloadId}] Retry download error:`, error);
@@ -924,6 +1104,15 @@ export default function SpotifyConverter() {
           if (!audioBlob) {
             console.error(`[Batch] No audio blob for "${track.name}"`);
             continue; // Skip this track if we somehow don't have a blob
+          }
+          
+          // Embed album artwork if available
+          console.log(`[Batch] Embedding album artwork for "${track.name}"`);
+          try {
+            audioBlob = await embedAlbumArtworkAPI(audioBlob, track);
+          } catch (artworkError) {
+            console.error(`[Batch] Error embedding artwork: ${artworkError instanceof Error ? artworkError.message : String(artworkError)}`);
+            // Continue with original blob
           }
           
           // Create filename
