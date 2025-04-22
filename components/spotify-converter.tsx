@@ -474,7 +474,7 @@ export default function SpotifyConverter() {
     }
   };
 
-  // Add an API endpoint call to embed album artwork server-side
+  // Enhance the embedAlbumArtworkAPI function to provide more detailed information
   const embedAlbumArtworkAPI = async (audioBlob: Blob, track: Track): Promise<Blob> => {
     try {
       if (!track.albumImageUrl) {
@@ -483,6 +483,7 @@ export default function SpotifyConverter() {
       }
       
       console.log(`[AlbumArt] Using API to embed album artwork for "${track.name}"`);
+      console.log(`[AlbumArt] Album image URL: ${track.albumImageUrl}`);
       
       // Create a FormData object to send the binary data
       const formData = new FormData();
@@ -493,6 +494,7 @@ export default function SpotifyConverter() {
       formData.append('albumImageUrl', track.albumImageUrl);
       
       // Send to our server-side API for processing
+      console.log(`[AlbumArt] Sending request to embed-artwork API, audio size: ${audioBlob.size} bytes`);
       const response = await fetch('/api/embed-artwork', {
         method: 'POST',
         body: formData
@@ -500,12 +502,27 @@ export default function SpotifyConverter() {
       
       if (!response.ok) {
         console.error(`[AlbumArt] API error: ${response.status} ${response.statusText}`);
+        
+        // Try to get more detailed error information
+        try {
+          const errorData = await response.json();
+          console.error(`[AlbumArt] API error details:`, errorData);
+        } catch (parseError) {
+          console.error(`[AlbumArt] Could not parse error response`);
+        }
+        
         return audioBlob; // Return original on error
       }
       
       // Get the processed audio with embedded artwork
       const processedBlob = await response.blob();
-      console.log(`[AlbumArt] Successfully embedded album artwork via API`);
+      console.log(`[AlbumArt] Successfully received processed audio from API, size: ${processedBlob.size} bytes`);
+      
+      // Only return the processed blob if it's a valid size (at least as big as the original)
+      if (processedBlob.size < audioBlob.size * 0.9) {
+        console.warn(`[AlbumArt] Processed blob is significantly smaller than original, using original instead`);
+        return audioBlob;
+      }
       
       return processedBlob;
     } catch (error) {
