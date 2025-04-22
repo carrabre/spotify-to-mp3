@@ -2,6 +2,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import NodeID3 from 'node-id3';
 import { Buffer } from 'buffer';
 
+// Define proper TypeScript interfaces for the node-id3 library
+interface ImageTag {
+  mime: string;
+  type: {
+    id: number;
+    name: string;
+  };
+  description: string;
+  imageBuffer: Buffer;
+}
+
+interface Tags {
+  title?: string;
+  artist?: string;
+  album?: string;
+  image?: ImageTag;
+  // Add other potential tag fields as needed
+}
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Allow up to 60 seconds for processing
@@ -70,32 +89,74 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Not a valid MP3 file' }, { status: 400 });
     }
     
-    // Create tags for the MP3 file
-    const tags = {
+    // Create tags for the MP3 file - using the exact format from the documentation
+    const tags: Tags = {
       title: trackName,
       artist: artistName,
       album: albumName,
-      APIC: { // Album Picture
+      image: {
         mime: guessImageMimeType(imageBuffer),
         type: {
-          id: 3, // Front cover
-          name: 'Front Cover'
+          id: 3,
+          name: "front cover"
         },
-        description: `Album cover for ${albumName}`,
+        description: `Album artwork for ${albumName}`,
         imageBuffer: imageBuffer
       }
     };
     
     // Write the tags to the MP3 file
     console.log(`[EmbedArtwork] Adding ID3 tags with artwork to audio file`);
-    
+    console.log(`[EmbedArtwork] Tags to be written:`, {
+      ...tags,
+      image: tags.image ? {
+        ...tags.image,
+        imageBuffer: `<Buffer length: ${tags.image.imageBuffer.length}>`
+      } : undefined
+    });
+
     try {
-      // Write new tags directly without trying to strip existing tags
+      // First attempt: direct write with the recommended method
+      console.log(`[EmbedArtwork] Attempting direct write with NodeID3.write()`);
       const taggedBuffer = NodeID3.write(tags, audioBuffer);
       
       if (!taggedBuffer) {
-        throw new Error('Failed to write ID3 tags');
+        console.warn(`[EmbedArtwork] NodeID3.write() returned falsy value, trying alternative method`);
+        
+        // Try with Promise API as an alternative
+        if (NodeID3.Promise && typeof NodeID3.Promise.write === 'function') {
+          console.log(`[EmbedArtwork] Attempting with NodeID3.Promise.write()`);
+          const promiseResult = await NodeID3.Promise.write(tags, audioBuffer);
+          
+          if (!promiseResult) {
+            throw new Error('Both NodeID3.write and NodeID3.Promise.write methods failed');
+          }
+          
+          console.log(`[EmbedArtwork] Successfully used Promise API to write tags`);
+          return new NextResponse(promiseResult, {
+            headers: {
+              'Content-Type': 'audio/mpeg',
+              'Content-Length': promiseResult.length.toString(),
+              'Cache-Control': 'private, max-age=3600'
+            }
+          });
+        } else {
+          throw new Error('NodeID3.write() failed and Promise API not available');
+        }
       }
+      
+      // Check if the returned buffer actually has ID3 tags
+      const writtenTags = NodeID3.read(taggedBuffer);
+      console.log(`[EmbedArtwork] Verification - tags after writing:`, 
+        writtenTags ? 
+          {
+            title: writtenTags.title,
+            artist: writtenTags.artist,
+            album: writtenTags.album,
+            hasImage: !!writtenTags.image
+          } : 
+          'No tags found'
+      );
       
       console.log(`[EmbedArtwork] Successfully embedded artwork, original size: ${audioBuffer.length}, new size: ${taggedBuffer.length}`);
       
