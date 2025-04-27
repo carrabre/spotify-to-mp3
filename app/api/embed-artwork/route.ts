@@ -176,21 +176,17 @@ export async function POST(request: NextRequest) {
     
     console.log(`[EmbedArtwork] Track metadata: "${trackName}" by ${artistName}, album: ${albumName}`);
     console.log(`[EmbedArtwork] Album image URL: ${albumImageUrl}`);
-    console.log(`[EmbedArtwork] Verifying image URL is from Spotify (should contain scdn.co)`);
     
-    // Verify that the image URL is from Spotify (contains scdn.co)
+    // Check where the image is coming from
+    const isSpotifyImage = albumImageUrl.includes('scdn.co') || albumImageUrl.includes('spotify.com');
+    const isAppleImage = albumImageUrl.includes('apple') || albumImageUrl.includes('mzstatic');
+    
+    console.log(`[EmbedArtwork] Image source: ${isSpotifyImage ? 'Spotify' : isAppleImage ? 'Apple Music' : 'Unknown source'}`);
+    
+    // Verify the image URL is valid
     if (!albumImageUrl) {
       console.error(`[EmbedArtwork] Missing album image URL`);
       return NextResponse.json({ error: 'Missing album image URL' }, { status: 400 });
-    }
-    
-    // Strict enforcement that image must be from Spotify
-    if (!albumImageUrl.includes('scdn.co') && !albumImageUrl.includes('spotify.com')) {
-      console.error(`[EmbedArtwork] Image URL is not from Spotify: ${albumImageUrl}`);
-      return NextResponse.json({ 
-        error: 'Failed to embed artwork', 
-        details: 'Album artwork must come from Spotify, not other sources' 
-      }, { status: 400 });
     }
     
     // Get the audio as array buffer
@@ -223,269 +219,266 @@ export async function POST(request: NextRequest) {
       console.warn(`[EmbedArtwork] Buffer does not appear to be a valid MP3 file, continuing anyway`);
     }
     
-    // Fetch the album artwork
-    console.log(`[EmbedArtwork] Fetching album artwork from: ${albumImageUrl}`);
+    // Download the album artwork
+    console.log(`[EmbedArtwork] Downloading album artwork from: ${albumImageUrl}`);
+    const artworkDownloadStart = Date.now();
+    
+    let artworkResponse;
     try {
-      const artworkResponse = await fetch(albumImageUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-      });
-      
-      console.log(`[EmbedArtwork] Artwork fetch response status: ${artworkResponse.status}`);
+      artworkResponse = await fetch(albumImageUrl);
       
       if (!artworkResponse.ok) {
-        console.error(`[EmbedArtwork] Failed to fetch album artwork: ${artworkResponse.status}`);
-        // Return the original audio if we can't get the artwork
-        return new NextResponse(audioBuffer, {
-          headers: {
-            'Content-Type': 'audio/mpeg',
-            'Content-Length': audioBuffer.length.toString(),
-            'Cache-Control': 'private, max-age=3600'
-          }
-        });
+        console.error(`[EmbedArtwork] Failed to download artwork: HTTP ${artworkResponse.status}`);
+        throw new Error(`Artwork download failed with status ${artworkResponse.status}`);
       }
       
-      // Get the image data
-      console.log(`[EmbedArtwork] Reading artwork response body`);
-      const imageArrayBuffer = await artworkResponse.arrayBuffer();
-      const imageBuffer = Buffer.from(imageArrayBuffer);
+      const artworkDownloadDuration = Date.now() - artworkDownloadStart;
+      console.log(`[EmbedArtwork] Artwork downloaded successfully in ${artworkDownloadDuration}ms`);
       
-      const imageMimeType = guessImageMimeType(imageBuffer);
-      console.log(`[EmbedArtwork] Artwork fetched, size: ${imageBuffer.length} bytes, type: ${imageMimeType}`);
+      // Get content type and size for logging
+      const contentType = artworkResponse.headers.get('content-type');
+      const contentLength = artworkResponse.headers.get('content-length');
+      console.log(`[EmbedArtwork] Artwork details - Type: ${contentType}, Size: ${contentLength || 'unknown'} bytes`);
       
-      // Create temp filenames
-      const tempDir = os.tmpdir();
-      const timestamp = new Date().getTime();
-      const tempAudioFile = path.join(tempDir, `audio-${timestamp}.mp3`);
-      const tempImageFile = path.join(tempDir, `cover-${timestamp}.jpg`);
-      const outputFile = path.join(tempDir, `output-${timestamp}.mp3`);
+    } catch (error) {
+      console.error(`[EmbedArtwork] Error downloading artwork:`, error);
+      return NextResponse.json({
+        error: 'Failed to download album artwork',
+        details: error instanceof Error ? error.message : String(error)
+      }, { status: 500 });
+    }
+    
+    // Convert artwork to buffer
+    const artworkBuffer = await artworkResponse.arrayBuffer();
+    console.log(`[EmbedArtwork] Artwork loaded as ArrayBuffer, size: ${artworkBuffer.byteLength} bytes`);
+    
+    // Get the image data
+    const imageBuffer = Buffer.from(artworkBuffer);
+    
+    const imageMimeType = guessImageMimeType(imageBuffer);
+    console.log(`[EmbedArtwork] Artwork fetched, size: ${imageBuffer.length} bytes, type: ${imageMimeType}`);
+    
+    // Create temp filenames
+    const tempDir = os.tmpdir();
+    const timestamp = new Date().getTime();
+    const tempAudioFile = path.join(tempDir, `audio-${timestamp}.mp3`);
+    const tempImageFile = path.join(tempDir, `cover-${timestamp}.jpg`);
+    const outputFile = path.join(tempDir, `output-${timestamp}.mp3`);
+    
+    console.log(`[EmbedArtwork] Created temp file paths:`);
+    console.log(`[EmbedArtwork] - Audio: ${tempAudioFile}`);
+    console.log(`[EmbedArtwork] - Image: ${tempImageFile}`);
+    console.log(`[EmbedArtwork] - Output: ${outputFile}`);
+    
+    try {
+      // Save the files
+      console.log(`[EmbedArtwork] Saving audio to temp file`);
+      fs.writeFileSync(tempAudioFile, audioBuffer);
+      console.log(`[EmbedArtwork] Audio saved to ${tempAudioFile}, size: ${fs.statSync(tempAudioFile).size} bytes`);
       
-      console.log(`[EmbedArtwork] Created temp file paths:`);
-      console.log(`[EmbedArtwork] - Audio: ${tempAudioFile}`);
-      console.log(`[EmbedArtwork] - Image: ${tempImageFile}`);
-      console.log(`[EmbedArtwork] - Output: ${outputFile}`);
+      console.log(`[EmbedArtwork] Saving image to temp file`);
+      fs.writeFileSync(tempImageFile, imageBuffer);
+      console.log(`[EmbedArtwork] Image saved to ${tempImageFile}, size: ${fs.statSync(tempImageFile).size} bytes`);
       
+      let success = false;
+      let processedBuffer: Buffer = audioBuffer; // Default to original
+      
+      // Try multiple methods in sequence until one succeeds
+      
+      // Method 1: Use NodeID3 with file-based approach
+      console.log(`[EmbedArtwork] ATTEMPT METHOD 1: NodeID3 file-based approach`);
       try {
-        // Save the files
-        console.log(`[EmbedArtwork] Saving audio to temp file`);
-        fs.writeFileSync(tempAudioFile, audioBuffer);
-        console.log(`[EmbedArtwork] Audio saved to ${tempAudioFile}, size: ${fs.statSync(tempAudioFile).size} bytes`);
+        // First remove any existing tags to avoid conflicts
+        console.log(`[EmbedArtwork] Removing existing ID3 tags`);
+        NodeID3.removeTags(tempAudioFile);
         
-        console.log(`[EmbedArtwork] Saving image to temp file`);
-        fs.writeFileSync(tempImageFile, imageBuffer);
-        console.log(`[EmbedArtwork] Image saved to ${tempImageFile}, size: ${fs.statSync(tempImageFile).size} bytes`);
+        // Create tags according to the NodeID3 documentation
+        console.log(`[EmbedArtwork] Creating ID3 tags with image path`);
+        const tags: Tags = {
+          title: trackName,
+          artist: artistName,
+          album: albumName,
+          // Use the string path format directly - this is one valid way according to the docs
+          image: tempImageFile
+        };
         
-        let success = false;
-        let processedBuffer: Buffer = audioBuffer; // Default to original
+        // Write tags according to docs
+        console.log(`[EmbedArtwork] Writing ID3 tags to file`);
+        const writeResult = NodeID3.write(tags, tempAudioFile);
+        console.log(`[EmbedArtwork] NodeID3 write result:`, writeResult);
         
-        // Try multiple methods in sequence until one succeeds
+        // Verify the result
+        console.log(`[EmbedArtwork] Verifying tags were written`);
+        const readTags = NodeID3.read(tempAudioFile) as Tags | null;
+        console.log(`[EmbedArtwork] Read tags:`, readTags ? 'Success' : 'Failed');
+        console.log(`[EmbedArtwork] Has image:`, readTags && (readTags.image || readTags.raw?.APIC) ? 'Yes' : 'No');
         
-        // Method 1: Use NodeID3 with file-based approach
-        console.log(`[EmbedArtwork] ATTEMPT METHOD 1: NodeID3 file-based approach`);
+        if (readTags && (readTags.image || readTags.raw?.APIC)) {
+          console.log(`[EmbedArtwork] Method 1: NodeID3 tags successfully verified`);
+          success = true;
+          processedBuffer = fs.readFileSync(tempAudioFile);
+          console.log(`[EmbedArtwork] Read processed file, size: ${processedBuffer.length} bytes`);
+        } else {
+          console.log(`[EmbedArtwork] Method 1: NodeID3 verification failed, tags not found`);
+        }
+      } catch (nodeID3Error) {
+        console.error(`[EmbedArtwork] Method 1 failed with error:`, nodeID3Error);
+      }
+      
+      // Method 2: Use ffmpeg if available and Method 1 failed
+      if (!success) {
+        console.log(`[EmbedArtwork] ATTEMPT METHOD 2: ffmpeg approach`);
         try {
-          // First remove any existing tags to avoid conflicts
-          console.log(`[EmbedArtwork] Removing existing ID3 tags`);
-          NodeID3.removeTags(tempAudioFile);
+          // Check if ffmpeg is installed
+          console.log(`[EmbedArtwork] Checking if ffmpeg is available`);
+          try {
+            const ffmpegVersionResult = await execFileAsync('ffmpeg', ['-version']);
+            console.log(`[EmbedArtwork] ffmpeg is available: ${ffmpegVersionResult.stdout.substring(0, 50)}...`);
+          } catch (ffmpegCheckError) {
+            console.error(`[EmbedArtwork] ffmpeg not available:`, ffmpegCheckError);
+            throw new Error('ffmpeg not available');
+          }
           
-          // Create tags according to the NodeID3 documentation
-          console.log(`[EmbedArtwork] Creating ID3 tags with image path`);
-          const tags: Tags = {
+          // Use ffmpeg to embed cover art with multiple metadata formats for compatibility
+          console.log(`[EmbedArtwork] Running ffmpeg command to embed artwork`);
+          const ffmpegArgs = [
+            '-i', tempAudioFile,
+            '-i', tempImageFile,
+            '-map', '0:0',
+            '-map', '1:0',
+            '-c', 'copy',
+            '-id3v2_version', '3',
+            '-metadata:s:v', 'title=Album cover',
+            '-metadata:s:v', 'comment=Cover (front)',
+            '-metadata', `title=${trackName}`,
+            '-metadata', `artist=${artistName}`,
+            '-metadata', `album=${albumName}`,
+            // Force artwork attachment as cover art
+            '-disposition:v', 'attached_pic',
+            outputFile
+          ];
+          
+          console.log(`[EmbedArtwork] ffmpeg command:`, 'ffmpeg', ffmpegArgs.join(' '));
+          const ffmpegResult = await execFileAsync('ffmpeg', ffmpegArgs);
+          console.log(`[EmbedArtwork] ffmpeg execution complete`);
+          
+          if (fs.existsSync(outputFile)) {
+            const outputStats = fs.statSync(outputFile);
+            console.log(`[EmbedArtwork] ffmpeg output file exists, size: ${outputStats.size} bytes`);
+            
+            // Only use the output if it's a reasonable size
+            if (outputStats.size > audioBuffer.length * 0.9) {
+              success = true;
+              processedBuffer = fs.readFileSync(outputFile);
+              console.log(`[EmbedArtwork] Method 2: ffmpeg processing successful, output size: ${processedBuffer.length} bytes`);
+            } else {
+              console.warn(`[EmbedArtwork] Method 2: ffmpeg output too small (${outputStats.size} bytes), may be corrupted`);
+            }
+          } else {
+            console.warn(`[EmbedArtwork] Method 2: ffmpeg output file not created`);
+          }
+        } catch (ffmpegError) {
+          console.error(`[EmbedArtwork] Method 2 failed with error:`, ffmpegError);
+        }
+      }
+      
+      // Method 3: Try a direct buffer operation using structured image tag
+      if (!success) {
+        console.log(`[EmbedArtwork] ATTEMPT METHOD 3: Direct buffer method with image tag`);
+        try {
+          // Create tags object using the format recommended in node-id3 docs 
+          console.log(`[EmbedArtwork] Creating direct tag object with imageBuffer`);
+          const directTags: Tags = {
             title: trackName,
             artist: artistName,
             album: albumName,
-            // Use the string path format directly - this is one valid way according to the docs
-            image: tempImageFile
+            image: {
+              mime: imageMimeType,
+              type: {
+                id: 3, // 3 = front cover as per ID3v2 spec
+                name: "front cover"
+              },
+              description: albumName || "Album Cover",
+              imageBuffer: imageBuffer
+            }
           };
           
-          // Write tags according to docs
-          console.log(`[EmbedArtwork] Writing ID3 tags to file`);
-          const writeResult = NodeID3.write(tags, tempAudioFile);
-          console.log(`[EmbedArtwork] NodeID3 write result:`, writeResult);
+          // Apply tags directly to buffer
+          console.log(`[EmbedArtwork] Applying tags directly to audio buffer`);
+          const taggedBuffer = NodeID3.write(directTags, audioBuffer) as Buffer;
           
-          // Verify the result
-          console.log(`[EmbedArtwork] Verifying tags were written`);
-          const readTags = NodeID3.read(tempAudioFile) as Tags | null;
-          console.log(`[EmbedArtwork] Read tags:`, readTags ? 'Success' : 'Failed');
-          console.log(`[EmbedArtwork] Has image:`, readTags && (readTags.image || readTags.raw?.APIC) ? 'Yes' : 'No');
-          
-          if (readTags && (readTags.image || readTags.raw?.APIC)) {
-            console.log(`[EmbedArtwork] Method 1: NodeID3 tags successfully verified`);
+          if (taggedBuffer && taggedBuffer.length > audioBuffer.length * 0.9) {
+            console.log(`[EmbedArtwork] Method 3: Direct buffer tagging successful, size: ${taggedBuffer.length} bytes`);
             success = true;
-            processedBuffer = fs.readFileSync(tempAudioFile);
-            console.log(`[EmbedArtwork] Read processed file, size: ${processedBuffer.length} bytes`);
+            processedBuffer = Buffer.from(taggedBuffer);
           } else {
-            console.log(`[EmbedArtwork] Method 1: NodeID3 verification failed, tags not found`);
-          }
-        } catch (nodeID3Error) {
-          console.error(`[EmbedArtwork] Method 1 failed with error:`, nodeID3Error);
-        }
-        
-        // Method 2: Use ffmpeg if available and Method 1 failed
-        if (!success) {
-          console.log(`[EmbedArtwork] ATTEMPT METHOD 2: ffmpeg approach`);
-          try {
-            // Check if ffmpeg is installed
-            console.log(`[EmbedArtwork] Checking if ffmpeg is available`);
-            try {
-              const ffmpegVersionResult = await execFileAsync('ffmpeg', ['-version']);
-              console.log(`[EmbedArtwork] ffmpeg is available: ${ffmpegVersionResult.stdout.substring(0, 50)}...`);
-            } catch (ffmpegCheckError) {
-              console.error(`[EmbedArtwork] ffmpeg not available:`, ffmpegCheckError);
-              throw new Error('ffmpeg not available');
-            }
+            console.warn(`[EmbedArtwork] Method 3: Direct buffer tagging failed or produced suspicious result`);
+            console.log(`[EmbedArtwork] ATTEMPT METHOD 4: Raw APIC frame approach`);
             
-            // Use ffmpeg to embed cover art with multiple metadata formats for compatibility
-            console.log(`[EmbedArtwork] Running ffmpeg command to embed artwork`);
-            const ffmpegArgs = [
-              '-i', tempAudioFile,
-              '-i', tempImageFile,
-              '-map', '0:0',
-              '-map', '1:0',
-              '-c', 'copy',
-              '-id3v2_version', '3',
-              '-metadata:s:v', 'title=Album cover',
-              '-metadata:s:v', 'comment=Cover (front)',
-              '-metadata', `title=${trackName}`,
-              '-metadata', `artist=${artistName}`,
-              '-metadata', `album=${albumName}`,
-              // Force artwork attachment as cover art
-              '-disposition:v', 'attached_pic',
-              outputFile
-            ];
-            
-            console.log(`[EmbedArtwork] ffmpeg command:`, 'ffmpeg', ffmpegArgs.join(' '));
-            const ffmpegResult = await execFileAsync('ffmpeg', ffmpegArgs);
-            console.log(`[EmbedArtwork] ffmpeg execution complete`);
-            
-            if (fs.existsSync(outputFile)) {
-              const outputStats = fs.statSync(outputFile);
-              console.log(`[EmbedArtwork] ffmpeg output file exists, size: ${outputStats.size} bytes`);
-              
-              // Only use the output if it's a reasonable size
-              if (outputStats.size > audioBuffer.length * 0.9) {
-                success = true;
-                processedBuffer = fs.readFileSync(outputFile);
-                console.log(`[EmbedArtwork] Method 2: ffmpeg processing successful, output size: ${processedBuffer.length} bytes`);
-              } else {
-                console.warn(`[EmbedArtwork] Method 2: ffmpeg output too small (${outputStats.size} bytes), may be corrupted`);
-              }
-            } else {
-              console.warn(`[EmbedArtwork] Method 2: ffmpeg output file not created`);
-            }
-          } catch (ffmpegError) {
-            console.error(`[EmbedArtwork] Method 2 failed with error:`, ffmpegError);
-          }
-        }
-        
-        // Method 3: Try a direct buffer operation using structured image tag
-        if (!success) {
-          console.log(`[EmbedArtwork] ATTEMPT METHOD 3: Direct buffer method with image tag`);
-          try {
-            // Create tags object using the format recommended in node-id3 docs 
-            console.log(`[EmbedArtwork] Creating direct tag object with imageBuffer`);
-            const directTags: Tags = {
+            // Final fallback - try using the raw APIC tag
+            console.log(`[EmbedArtwork] Creating raw APIC tag`);
+            const rawTags: Tags = {
               title: trackName,
               artist: artistName,
               album: albumName,
-              image: {
-                mime: imageMimeType,
+              APIC: {
+                imageBuffer: imageBuffer,
                 type: {
-                  id: 3, // 3 = front cover as per ID3v2 spec
+                  id: 3,
                   name: "front cover"
                 },
                 description: albumName || "Album Cover",
-                imageBuffer: imageBuffer
+                mime: imageMimeType
               }
             };
             
-            // Apply tags directly to buffer
-            console.log(`[EmbedArtwork] Applying tags directly to audio buffer`);
-            const taggedBuffer = NodeID3.write(directTags, audioBuffer) as Buffer;
-            
-            if (taggedBuffer && taggedBuffer.length > audioBuffer.length * 0.9) {
-              console.log(`[EmbedArtwork] Method 3: Direct buffer tagging successful, size: ${taggedBuffer.length} bytes`);
+            console.log(`[EmbedArtwork] Applying raw APIC tag to audio buffer`);
+            const rawTaggedBuffer = NodeID3.write(rawTags, audioBuffer) as Buffer;
+            if (rawTaggedBuffer && rawTaggedBuffer.length > audioBuffer.length * 0.9) {
+              console.log(`[EmbedArtwork] Method 4: Raw APIC tagging successful, size: ${rawTaggedBuffer.length} bytes`);
               success = true;
-              processedBuffer = Buffer.from(taggedBuffer);
+              processedBuffer = Buffer.from(rawTaggedBuffer);
             } else {
-              console.warn(`[EmbedArtwork] Method 3: Direct buffer tagging failed or produced suspicious result`);
-              console.log(`[EmbedArtwork] ATTEMPT METHOD 4: Raw APIC frame approach`);
-              
-              // Final fallback - try using the raw APIC tag
-              console.log(`[EmbedArtwork] Creating raw APIC tag`);
-              const rawTags: Tags = {
-                title: trackName,
-                artist: artistName,
-                album: albumName,
-                APIC: {
-                  imageBuffer: imageBuffer,
-                  type: {
-                    id: 3,
-                    name: "front cover"
-                  },
-                  description: albumName || "Album Cover",
-                  mime: imageMimeType
-                }
-              };
-              
-              console.log(`[EmbedArtwork] Applying raw APIC tag to audio buffer`);
-              const rawTaggedBuffer = NodeID3.write(rawTags, audioBuffer) as Buffer;
-              if (rawTaggedBuffer && rawTaggedBuffer.length > audioBuffer.length * 0.9) {
-                console.log(`[EmbedArtwork] Method 4: Raw APIC tagging successful, size: ${rawTaggedBuffer.length} bytes`);
-                success = true;
-                processedBuffer = Buffer.from(rawTaggedBuffer);
-              } else {
-                console.warn(`[EmbedArtwork] Method 4: Raw APIC tagging failed or produced suspicious result`);
-              }
+              console.warn(`[EmbedArtwork] Method 4: Raw APIC tagging failed or produced suspicious result`);
             }
-          } catch (directError) {
-            console.error(`[EmbedArtwork] Methods 3/4 failed with error:`, directError);
           }
-        }
-        
-        // Return the processed audio or original if all methods failed
-        console.log(`[EmbedArtwork] ✅ Returning ${success ? 'processed' : 'original'} audio, size: ${processedBuffer.length} bytes`);
-        return new NextResponse(processedBuffer, {
-          headers: {
-            'Content-Type': 'audio/mpeg',
-            'Content-Length': processedBuffer.length.toString(),
-            'Cache-Control': 'private, max-age=3600'
-          }
-        });
-      } catch (fileError) {
-        console.error(`[EmbedArtwork] File operation error:`, fileError);
-        throw fileError;
-      } finally {
-        // Clean up temp files
-        console.log(`[EmbedArtwork] Cleaning up temp files`);
-        try {
-          if (fs.existsSync(tempAudioFile)) {
-            fs.unlinkSync(tempAudioFile);
-            console.log(`[EmbedArtwork] Removed temp audio file`);
-          }
-          if (fs.existsSync(tempImageFile)) {
-            fs.unlinkSync(tempImageFile);
-            console.log(`[EmbedArtwork] Removed temp image file`);
-          }
-          if (fs.existsSync(outputFile)) {
-            fs.unlinkSync(outputFile);
-            console.log(`[EmbedArtwork] Removed temp output file`);
-          }
-          console.log(`[EmbedArtwork] All temp files cleaned up`);
-        } catch (cleanupError) {
-          console.error(`[EmbedArtwork] Error cleaning up temp files:`, cleanupError);
+        } catch (directError) {
+          console.error(`[EmbedArtwork] Methods 3/4 failed with error:`, directError);
         }
       }
-    } catch (artworkError) {
-      console.error(`[EmbedArtwork] Error fetching or processing artwork:`, artworkError);
-      // Return the original audio if we can't get the artwork
-      return new NextResponse(audioBuffer, {
+      
+      // Return the processed audio or original if all methods failed
+      console.log(`[EmbedArtwork] ✅ Returning ${success ? 'processed' : 'original'} audio, size: ${processedBuffer.length} bytes`);
+      return new NextResponse(processedBuffer, {
         headers: {
           'Content-Type': 'audio/mpeg',
-          'Content-Length': audioBuffer.length.toString(),
+          'Content-Length': processedBuffer.length.toString(),
           'Cache-Control': 'private, max-age=3600'
         }
       });
+    } catch (fileError) {
+      console.error(`[EmbedArtwork] File operation error:`, fileError);
+      throw fileError;
+    } finally {
+      // Clean up temp files
+      console.log(`[EmbedArtwork] Cleaning up temp files`);
+      try {
+        if (fs.existsSync(tempAudioFile)) {
+          fs.unlinkSync(tempAudioFile);
+          console.log(`[EmbedArtwork] Removed temp audio file`);
+        }
+        if (fs.existsSync(tempImageFile)) {
+          fs.unlinkSync(tempImageFile);
+          console.log(`[EmbedArtwork] Removed temp image file`);
+        }
+        if (fs.existsSync(outputFile)) {
+          fs.unlinkSync(outputFile);
+          console.log(`[EmbedArtwork] Removed temp output file`);
+        }
+        console.log(`[EmbedArtwork] All temp files cleaned up`);
+      } catch (cleanupError) {
+        console.error(`[EmbedArtwork] Error cleaning up temp files:`, cleanupError);
+      }
     }
   } catch (error) {
     console.error(`[EmbedArtwork] Critical error:`, error instanceof Error ? {

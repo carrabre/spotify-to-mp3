@@ -74,7 +74,7 @@ function loadEnvVariables() {
 }
 
 // Get Spotify access token
-async function getSpotifyToken(): Promise<string> {
+export async function getSpotifyToken(): Promise<string> {
   // Load credentials from all possible sources
   const { clientId, clientSecret, debugInfo } = loadEnvVariables();
 

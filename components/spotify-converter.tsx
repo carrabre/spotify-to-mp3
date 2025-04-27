@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { fetchSpotifyData } from "@/lib/spotify"
+import { fetchAppleMusicData } from "@/lib/appleMusic"
 import { generateExcel } from "@/lib/excel"
 import TrackList from "@/components/track-list"
 import YouTubeSearchModal from "@/components/youtube-search-modal"
@@ -21,7 +22,7 @@ import type { Track, YouTubeVideo } from "@/lib/types"
 const MAX_CONCURRENT_REQUESTS = 5
 
 export default function SpotifyConverter() {
-  const [spotifyUrl, setSpotifyUrl] = useState("")
+  const [musicUrl, setMusicUrl] = useState("")
   const [tracks, setTracks] = useState<Track[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,29 +66,41 @@ export default function SpotifyConverter() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!spotifyUrl.includes("spotify.com")) {
-      setError("Please enter a valid Spotify URL")
+    if (!musicUrl.includes("spotify.com") && !musicUrl.includes("music.apple.com")) {
+      setError("Please enter a valid Spotify or Apple Music URL")
       return
     }
 
     setLoading(true)
     setError(null)
     setWarning(null)
-    setProcessingStatus("Fetching tracks from Spotify...")
+    setProcessingStatus("Fetching tracks...")
 
     try {
-      // Fetch tracks via our new server-side API (no client credentials required)
-      const response = await fetch(`/api/spotify?url=${encodeURIComponent(spotifyUrl)}`)
-      if (!response.ok) throw new Error(`Spotify API returned status ${response.status}`)
-      const spotifyData = await response.json()
-      const spotifyTracks = spotifyData.tracks
-      const name = spotifyData.sourceName
+      let musicData;
+      
+      if (musicUrl.includes("spotify.com")) {
+        // Fetch tracks via our Spotify API route
+        setProcessingStatus("Fetching tracks from Spotify...")
+        const response = await fetch(`/api/spotify?url=${encodeURIComponent(musicUrl)}`)
+        if (!response.ok) throw new Error(`Spotify API returned status ${response.status}`)
+        musicData = await response.json()
+      } else if (musicUrl.includes("music.apple.com")) {
+        // Use our Apple Music library function directly 
+        setProcessingStatus("Fetching tracks from Apple Music...")
+        musicData = await fetchAppleMusicData(musicUrl)
+      } else {
+        throw new Error("Unsupported music service URL")
+      }
+      
+      const musicTracks = musicData.tracks
+      const name = musicData.sourceName
 
-      setProcessingStatus(`Found ${spotifyTracks.length} tracks from "${name}". Preparing for verification...`)
+      setProcessingStatus(`Found ${musicTracks.length} tracks from "${name}". Preparing for verification...`)
       setSourceName(name)
 
       // Initialize tracks without YouTube matches
-      const initialTracks = spotifyTracks.map((track: any) => ({
+      const initialTracks = musicTracks.map((track: any) => ({
         ...track,
         youtubeId: null,
         youtubeTitle: null,
@@ -486,19 +499,16 @@ export default function SpotifyConverter() {
         return audioBlob; // Return original blob if no album art
       }
       
-      // Validate that we have a Spotify album cover
-      if (!track.albumImageUrl.includes('scdn.co') && !track.albumImageUrl.includes('spotify.com')) {
-        console.error(`[AlbumArt] Not using a Spotify album URL: ${track.albumImageUrl}`);
-        // Try to get a Spotify URL if possible
-        if (track.youtubeThumbnail && track.albumImageUrl === track.youtubeThumbnail) {
-          console.error(`[AlbumArt] Image URL is from YouTube, not Spotify`);
-          return audioBlob; // Skip embedding as we need a Spotify image
-        }
-        return audioBlob; // Skip embedding with non-Spotify images
-      }
+      // Check if this is a Spotify image URL
+      const isSpotifyImage = track.albumImageUrl.includes('scdn.co') || track.albumImageUrl.includes('spotify.com');
+      const sourceType = isSpotifyImage ? 'Spotify' : 
+                         track.albumImageUrl.includes('apple') || track.albumImageUrl.includes('mzstatic') ? 'Apple Music' : 
+                         'Unknown';
       
-      console.log(`[AlbumArt] Using API to embed album artwork for "${track.name}"`);
-      console.log(`[AlbumArt] Album image URL: ${track.albumImageUrl}`);
+      console.log(`[AlbumArt] Image source for "${track.name}": ${sourceType} (${track.albumImageUrl})`);
+      
+      console.log(`[AlbumArt] Downloading album artwork from: ${track.albumImageUrl}`);
+      const downloadStart = Date.now();
       
       // Create a FormData object to send the binary data
       const formData = new FormData();
@@ -515,34 +525,34 @@ export default function SpotifyConverter() {
         body: formData
       });
       
+      const downloadDuration = Date.now() - downloadStart;
+      console.log(`[AlbumArt] Download and embed completed in ${downloadDuration}ms`);
+      
       if (!response.ok) {
-        console.error(`[AlbumArt] API error: ${response.status} ${response.statusText}`);
+        console.error(`[AlbumArt] Failed to embed artwork: ${response.status}`);
         
-        // Try to get more detailed error information
+        // Try to get the error details from the response
         try {
           const errorData = await response.json();
-          console.error(`[AlbumArt] API error details:`, errorData);
-        } catch (parseError) {
-          console.error(`[AlbumArt] Could not parse error response`);
+          console.error(`[AlbumArt] Error details:`, errorData);
+        } catch {
+          // Ignore parse errors
         }
         
-        return audioBlob; // Return original on error
+        return audioBlob; // Return original blob if embedding fails
       }
       
       // Get the processed audio with embedded artwork
+      console.log(`[AlbumArt] Got successful response from artwork API, processing blob...`);
       const processedBlob = await response.blob();
-      console.log(`[AlbumArt] Successfully received processed audio from API, size: ${processedBlob.size} bytes`);
       
-      // Only return the processed blob if it's a valid size (at least as big as the original)
-      if (processedBlob.size < audioBlob.size * 0.9) {
-        console.warn(`[AlbumArt] Processed blob is significantly smaller than original, using original instead`);
-        return audioBlob;
-      }
+      // Log details
+      console.log(`[AlbumArt] Successfully embedded artwork, original size: ${audioBlob.size} bytes, new size: ${processedBlob.size} bytes`);
       
       return processedBlob;
     } catch (error) {
-      console.error(`[AlbumArt] API error: ${error instanceof Error ? error.message : String(error)}`);
-      return audioBlob; // Return original on error
+      console.error(`[AlbumArt] Error processing artwork:`, error);
+      return audioBlob; // Return original blob on error
     }
   };
 
@@ -1324,38 +1334,37 @@ export default function SpotifyConverter() {
   const verifiedTracksCount = tracks.filter((track) => track.youtubeId && track.verified).length
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <Card>
         <CardContent className="pt-6">
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="relative flex-1">
-                <Music className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="flex-1">
                 <Input
-                  placeholder="Paste Spotify URL (track, album or playlist)"
-                  value={spotifyUrl}
-                  onChange={(e) => setSpotifyUrl(e.target.value)}
-                  className="pl-10"
+                  value={musicUrl}
+                  onChange={(e) => setMusicUrl(e.target.value)}
+                  placeholder="Enter Spotify or Apple Music URL (playlist, album, or track)"
+                  className="w-full"
                   disabled={loading}
                 />
               </div>
-              <Button type="submit" disabled={loading || !spotifyUrl}>
+              <Button type="submit" disabled={loading || !musicUrl} className="min-w-24">
                 {loading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing
+                    Loading
                   </>
                 ) : (
                   <>
-                    <Search className="mr-2 h-4 w-4" />
+                    <Music className="mr-2 h-4 w-4" />
                     Convert
                   </>
                 )}
               </Button>
             </div>
-            {loading && processingStatus && (
-              <div className="text-sm text-gray-500 mt-2 flex items-center">
-                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+
+            {processingStatus && (
+              <div className="text-xs text-gray-500 dark:text-gray-400 animate-pulse">
                 {processingStatus}
               </div>
             )}
